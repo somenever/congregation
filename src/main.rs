@@ -8,7 +8,7 @@ use std::{
     io::{BufRead, BufReader, Read},
     iter::Peekable,
     path::PathBuf,
-    process::{Command, Stdio},
+    process::{Command, ExitStatus, Stdio},
     sync::mpsc,
 };
 
@@ -53,7 +53,7 @@ fn parse_task(args: &mut Peekable<Args>, task_count: i32) -> TaskDef {
 
 enum TaskMessage {
     Stdout { task: usize, line: String },
-    Exited { task: usize },
+    Exited { task: usize, status: ExitStatus },
 }
 
 struct Task {
@@ -98,7 +98,8 @@ fn main() {
                     .read_line(&mut line)
                     .expect("failed to read task output");
                 if size == 0 {
-                    let _ = sender.send(TaskMessage::Exited { task: id });
+                    let status = process.wait().unwrap();
+                    let _ = sender.send(TaskMessage::Exited { task: id, status });
                     break;
                 }
                 let _ = sender.send(TaskMessage::Stdout {
@@ -122,9 +123,9 @@ fn main() {
                 let name = &running_tasks.get(&task).unwrap().name;
                 print!("{name}: {line}");
             }
-            TaskMessage::Exited { task } => {
+            TaskMessage::Exited { task, status } => {
                 let name = &running_tasks.get(&task).unwrap().name;
-                println!("{name}: exited");
+                println!("{name}: exited {status:#?}");
                 running_tasks.remove(&task);
                 if running_tasks.is_empty() {
                     break;
