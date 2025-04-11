@@ -3,9 +3,9 @@
 //   run "npm run start" -d ./api
 
 use std::{
-    collections::HashMap,
     env::{self, Args},
-    io::{stdout, BufRead, BufReader, Read, Stdout, Write},
+    fs,
+    io::{stdout, BufRead, BufReader, Write},
     iter::Peekable,
     path::PathBuf,
     process::{Command, ExitStatus, Stdio},
@@ -83,15 +83,18 @@ fn main() {
     let mut running_tasks = Vec::new();
     for (id, task) in tasks.into_iter().enumerate() {
         let sender = tx.clone();
+        let workdir = fs::canonicalize(task.workdir).expect("valid working directory");
         std::thread::spawn(move || {
             let mut process = if cfg!(windows) {
                 Command::new("cmd.exe")
                     .args(["/C", &task.command])
+                    .current_dir(workdir)
                     .stdout(Stdio::piped())
                     .spawn()
             } else {
                 Command::new("sh")
                     .args(["-c", &task.command])
+                    .current_dir(workdir)
                     .stdout(Stdio::piped())
                     .spawn()
             }
@@ -187,9 +190,15 @@ fn main() {
 
                 for task in &running_tasks[id + 1..] {
                     stdout
+                        .queue(terminal::Clear(terminal::ClearType::CurrentLine))
+                        .unwrap();
+                    stdout
                         .queue(style::Print(format!("{}\n", task.name)))
                         .unwrap();
                     for log in &task.logs {
+                        stdout
+                            .queue(terminal::Clear(terminal::ClearType::CurrentLine))
+                            .unwrap();
                         stdout
                             .queue(style::PrintStyledContent("│ ".dark_grey()))
                             .unwrap();
@@ -211,7 +220,6 @@ fn main() {
             }
             TaskMessage::Exited { task: id, status } => {
                 let task = running_tasks.get_mut(id).unwrap();
-                //println!("{}: exited {status:#?}", task.name);
                 task.completed = true;
                 completed_count += 1;
 
