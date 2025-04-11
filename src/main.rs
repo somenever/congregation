@@ -12,7 +12,11 @@ use std::{
     sync::mpsc,
 };
 
-use crossterm::{cursor, style, terminal, QueueableCommand};
+use crossterm::{
+    cursor,
+    style::{self, Stylize},
+    terminal, QueueableCommand,
+};
 
 #[derive(Debug)]
 struct TaskDef {
@@ -131,6 +135,12 @@ fn main() {
         stdout
             .queue(style::Print(format!("{}\n", task.name)))
             .unwrap();
+        stdout
+            .queue(style::PrintStyledContent("└ ".dark_grey()))
+            .unwrap();
+        stdout
+            .queue(style::PrintStyledContent("running...\n".grey()))
+            .unwrap();
     }
     stdout.flush().unwrap();
 
@@ -141,36 +151,96 @@ fn main() {
             TaskMessage::Stdout { task: id, line } => {
                 let task = running_tasks.get_mut(id).unwrap();
                 task.logs.push(line.clone());
+                let task_completed = task.completed;
 
                 let mut distance = 0;
                 for task in &running_tasks[id + 1..] {
-                    distance += task.logs.len() + 1;
+                    if task.completed {
+                        break;
+                    }
+                    distance += task.logs.len() + 2;
                 }
 
-                if distance > 0 {
-                    stdout.queue(cursor::MoveUp(distance as u16)).unwrap();
+                if distance + 1 > 0 {
+                    stdout.queue(cursor::MoveUp((distance + 1) as u16)).unwrap();
                 }
                 stdout
                     .queue(terminal::Clear(terminal::ClearType::CurrentLine))
                     .unwrap();
+                stdout
+                    .queue(style::PrintStyledContent("│ ".dark_grey()))
+                    .unwrap();
                 stdout.queue(style::Print(line)).unwrap();
+                stdout
+                    .queue(terminal::Clear(terminal::ClearType::CurrentLine))
+                    .unwrap();
+                stdout
+                    .queue(style::PrintStyledContent("└ ".dark_grey()))
+                    .unwrap();
+                stdout
+                    .queue(style::PrintStyledContent(if task_completed {
+                        "completed\n".green()
+                    } else {
+                        "running...\n".grey()
+                    }))
+                    .unwrap();
 
                 for task in &running_tasks[id + 1..] {
                     stdout
                         .queue(style::Print(format!("{}\n", task.name)))
                         .unwrap();
                     for log in &task.logs {
+                        stdout
+                            .queue(style::PrintStyledContent("│ ".dark_grey()))
+                            .unwrap();
                         stdout.queue(style::Print(log)).unwrap();
                     }
+                    stdout
+                        .queue(style::PrintStyledContent("└ ".dark_grey()))
+                        .unwrap();
+                    stdout
+                        .queue(style::PrintStyledContent(if task.completed {
+                            "completed\n".green()
+                        } else {
+                            "running...\n".grey()
+                        }))
+                        .unwrap();
                 }
 
                 stdout.flush().unwrap();
             }
-            TaskMessage::Exited { task, status } => {
-                let task = running_tasks.get_mut(task).unwrap();
+            TaskMessage::Exited { task: id, status } => {
+                let task = running_tasks.get_mut(id).unwrap();
                 //println!("{}: exited {status:#?}", task.name);
                 task.completed = true;
                 completed_count += 1;
+
+                let mut distance = 0;
+                for task in &running_tasks[id + 1..] {
+                    if task.completed {
+                        break;
+                    }
+                    distance += task.logs.len() + 2;
+                }
+                if distance + 1 > 0 {
+                    stdout.queue(cursor::MoveUp((distance + 1) as u16)).unwrap();
+                }
+                stdout
+                    .queue(terminal::Clear(terminal::ClearType::CurrentLine))
+                    .unwrap();
+                stdout
+                    .queue(style::PrintStyledContent("└ ".dark_grey()))
+                    .unwrap();
+                stdout
+                    .queue(style::PrintStyledContent("completed\n".green()))
+                    .unwrap();
+                stdout.flush().unwrap();
+                if distance + 1 > 0 {
+                    stdout
+                        .queue(cursor::MoveDown((distance + 1) as u16))
+                        .unwrap();
+                }
+
                 if completed_count == running_tasks.len() {
                     break;
                 }
