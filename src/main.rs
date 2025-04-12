@@ -4,12 +4,12 @@
 
 use std::{
     env::{self, Args},
-    fs,
-    io::{stdout, BufRead, BufReader, Write},
+    fs::{self, File},
+    io::{stdout, BufRead, BufReader, Stdout, Write},
     iter::Peekable,
     path::PathBuf,
     process::{Command, ExitStatus, Stdio},
-    sync::mpsc,
+    sync::mpsc::{self, Sender},
 };
 
 use crossterm::{
@@ -69,6 +69,83 @@ struct Task {
     logs: Vec<String>,
 }
 
+impl TaskDef {
+    fn run(self, id: usize, message_channel: Sender<TaskMessage>) -> Task {
+        let workdir = fs::canonicalize(self.workdir).expect("valid working directory");
+        std::thread::spawn(move || {
+            let mut file = File::create(format!("./{id}")).unwrap();
+
+            let mut process = if cfg!(windows) {
+                Command::new("cmd.exe")
+                    .args(["/C", &self.command])
+                    .current_dir(workdir)
+                    .stdout(Stdio::piped())
+                    .spawn()
+            } else {
+                Command::new("sh")
+                    .args(["-c", &self.command])
+                    .current_dir(workdir)
+                    .stdout(Stdio::piped())
+                    .spawn()
+            }
+            .unwrap();
+
+            let stdout = process.stdout.take().unwrap();
+            let mut reader = BufReader::new(stdout);
+            let mut line = String::new();
+
+            loop {
+                let size = reader
+                    .read_line(&mut line)
+                    .expect("failed to read task output");
+                write!(file, "{}", &line).unwrap();
+                if size == 0 {
+                    let status = process.wait().unwrap();
+                    let _ = message_channel.send(TaskMessage::Exited { task: id, status });
+                    break;
+                }
+                let _ = message_channel.send(TaskMessage::Stdout {
+                    task: id,
+                    line: line.clone(),
+                });
+                line.clear();
+            }
+        });
+        Task {
+            name: self.name,
+            id,
+            logs: Vec::new(),
+            completed: false,
+        }
+    }
+}
+
+fn get_task_tail_offset(running_tasks: &[Task], id: usize) -> usize {
+    let mut offset = 0;
+    for task in &running_tasks[id + 1..] {
+        offset += 1; // Task name line
+        offset += task.logs.len();
+        offset += 1; // Task status line
+    }
+    offset + 1
+}
+
+fn draw_task_status(stdout: &mut Stdout, completed: bool) {
+    stdout
+        .queue(terminal::Clear(terminal::ClearType::CurrentLine))
+        .unwrap();
+    stdout
+        .queue(style::PrintStyledContent("└ ".dark_grey()))
+        .unwrap();
+    stdout
+        .queue(style::PrintStyledContent(if completed {
+            "completed\n".green()
+        } else {
+            "running...\n".grey()
+        }))
+        .unwrap();
+}
+
 fn main() {
     let mut args = std::env::args().peekable();
     args.next();
@@ -82,50 +159,7 @@ fn main() {
 
     let mut running_tasks = Vec::new();
     for (id, task) in tasks.into_iter().enumerate() {
-        let sender = tx.clone();
-        let workdir = fs::canonicalize(task.workdir).expect("valid working directory");
-        std::thread::spawn(move || {
-            let mut process = if cfg!(windows) {
-                Command::new("cmd.exe")
-                    .args(["/C", &task.command])
-                    .current_dir(workdir)
-                    .stdout(Stdio::piped())
-                    .spawn()
-            } else {
-                Command::new("sh")
-                    .args(["-c", &task.command])
-                    .current_dir(workdir)
-                    .stdout(Stdio::piped())
-                    .spawn()
-            }
-            .unwrap();
-
-            let stdout = process.stdout.take().unwrap();
-            let mut reader = BufReader::new(stdout);
-            let mut line = String::new();
-
-            loop {
-                line.clear();
-                let size = reader
-                    .read_line(&mut line)
-                    .expect("failed to read task output");
-                if size == 0 {
-                    let status = process.wait().unwrap();
-                    let _ = sender.send(TaskMessage::Exited { task: id, status });
-                    break;
-                }
-                let _ = sender.send(TaskMessage::Stdout {
-                    task: id,
-                    line: line.clone(),
-                });
-            }
-        });
-        running_tasks.push(Task {
-            name: task.name,
-            id,
-            logs: Vec::new(),
-            completed: false,
-        });
+        running_tasks.push(task.run(id, tx.clone()));
     }
 
     if running_tasks.len() == 0 {
@@ -138,118 +172,66 @@ fn main() {
         stdout
             .queue(style::Print(format!("{}\n", task.name)))
             .unwrap();
-        stdout
-            .queue(style::PrintStyledContent("└ ".dark_grey()))
-            .unwrap();
-        stdout
-            .queue(style::PrintStyledContent("running...\n".grey()))
-            .unwrap();
+        draw_task_status(&mut stdout, false);
     }
     stdout.flush().unwrap();
 
-    let mut completed_count = 0;
+    let mut completed_task_count = 0;
 
     for msg in rx {
         match msg {
             TaskMessage::Stdout { task: id, line } => {
-                let task = running_tasks.get_mut(id).unwrap();
-                task.logs.push(line.clone());
-                let task_completed = task.completed;
+                if true {
+                    let task = running_tasks.get_mut(id).unwrap();
+                    task.logs.push(line.clone());
 
-                let mut distance = 0;
-                for task in &running_tasks[id + 1..] {
-                    if task.completed {
-                        break;
-                    }
-                    distance += task.logs.len() + 2;
-                }
-
-                if distance + 1 > 0 {
-                    stdout.queue(cursor::MoveUp((distance + 1) as u16)).unwrap();
-                }
-                stdout
-                    .queue(terminal::Clear(terminal::ClearType::CurrentLine))
-                    .unwrap();
-                stdout
-                    .queue(style::PrintStyledContent("│ ".dark_grey()))
-                    .unwrap();
-                stdout.queue(style::Print(line)).unwrap();
-                stdout
-                    .queue(terminal::Clear(terminal::ClearType::CurrentLine))
-                    .unwrap();
-                stdout
-                    .queue(style::PrintStyledContent("└ ".dark_grey()))
-                    .unwrap();
-                stdout
-                    .queue(style::PrintStyledContent(if task_completed {
-                        "completed\n".green()
-                    } else {
-                        "running...\n".grey()
-                    }))
-                    .unwrap();
-
-                for task in &running_tasks[id + 1..] {
+                    let offset = get_task_tail_offset(&running_tasks, id);
+                    stdout.queue(cursor::MoveUp(offset as u16)).unwrap();
                     stdout
                         .queue(terminal::Clear(terminal::ClearType::CurrentLine))
                         .unwrap();
                     stdout
-                        .queue(style::Print(format!("{}\n", task.name)))
+                        .queue(style::PrintStyledContent("│ ".dark_grey()))
                         .unwrap();
-                    for log in &task.logs {
+                    stdout.queue(style::Print(line)).unwrap();
+                    draw_task_status(&mut stdout, false);
+
+                    for task in &running_tasks[id + 1..] {
                         stdout
                             .queue(terminal::Clear(terminal::ClearType::CurrentLine))
                             .unwrap();
                         stdout
-                            .queue(style::PrintStyledContent("│ ".dark_grey()))
+                            .queue(style::Print(format!("{}\n", task.name)))
                             .unwrap();
-                        stdout.queue(style::Print(log)).unwrap();
+                        for log in &task.logs {
+                            stdout
+                                .queue(terminal::Clear(terminal::ClearType::CurrentLine))
+                                .unwrap();
+                            stdout
+                                .queue(style::PrintStyledContent("│ ".dark_grey()))
+                                .unwrap();
+                            stdout.queue(style::Print(log)).unwrap();
+                        }
+                        draw_task_status(&mut stdout, task.completed);
                     }
-                    stdout
-                        .queue(style::PrintStyledContent("└ ".dark_grey()))
-                        .unwrap();
-                    stdout
-                        .queue(style::PrintStyledContent(if task.completed {
-                            "completed\n".green()
-                        } else {
-                            "running...\n".grey()
-                        }))
-                        .unwrap();
-                }
 
-                stdout.flush().unwrap();
+                    stdout.flush().unwrap();
+                }
             }
             TaskMessage::Exited { task: id, status } => {
+                // TODO: handle exit status ^
+
                 let task = running_tasks.get_mut(id).unwrap();
                 task.completed = true;
-                completed_count += 1;
+                completed_task_count += 1;
 
-                let mut distance = 0;
-                for task in &running_tasks[id + 1..] {
-                    if task.completed {
-                        break;
-                    }
-                    distance += task.logs.len() + 2;
-                }
-                if distance + 1 > 0 {
-                    stdout.queue(cursor::MoveUp((distance + 1) as u16)).unwrap();
-                }
-                stdout
-                    .queue(terminal::Clear(terminal::ClearType::CurrentLine))
-                    .unwrap();
-                stdout
-                    .queue(style::PrintStyledContent("└ ".dark_grey()))
-                    .unwrap();
-                stdout
-                    .queue(style::PrintStyledContent("completed\n".green()))
-                    .unwrap();
+                let offset = get_task_tail_offset(&running_tasks, id);
+                stdout.queue(cursor::MoveUp(offset as u16)).unwrap();
+                draw_task_status(&mut stdout, true);
+                stdout.queue(cursor::MoveDown(offset as u16)).unwrap();
                 stdout.flush().unwrap();
-                if distance + 1 > 0 {
-                    stdout
-                        .queue(cursor::MoveDown((distance + 1) as u16))
-                        .unwrap();
-                }
 
-                if completed_count == running_tasks.len() {
+                if completed_task_count == running_tasks.len() {
                     break;
                 }
             }
