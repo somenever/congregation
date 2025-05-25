@@ -214,7 +214,7 @@ enum TaskMessage {
 
 struct Task {
     id: usize,
-    completed: bool,
+    exit_status: Option<ExitStatus>,
     name: String,
     logs: Vec<String>,
     color: Color,
@@ -281,7 +281,7 @@ impl TaskDef {
             color: self.color,
             id,
             logs: Vec::new(),
-            completed: false,
+            exit_status: None,
             process,
         })
     }
@@ -297,7 +297,7 @@ fn get_task_tail_offset(running_tasks: &[Task], id: usize) -> usize {
     offset + 1
 }
 
-fn draw_task_status(stdout: &mut Stdout, completed: bool) {
+fn draw_task_status(stdout: &mut Stdout, task: &Task) {
     stdout
         .queue(terminal::Clear(terminal::ClearType::CurrentLine))
         .unwrap();
@@ -305,10 +305,16 @@ fn draw_task_status(stdout: &mut Stdout, completed: bool) {
         .queue(style::PrintStyledContent("└ ".dark_grey()))
         .unwrap();
     stdout
-        .queue(style::PrintStyledContent(if completed {
-            "completed\n".green()
-        } else {
-            "running...\n".grey()
+        .queue(style::PrintStyledContent(match task.exit_status {
+            Some(status) => if status.success() {
+                "completed\n".to_owned().green()
+            } else {
+                match status.code() {
+                    Some(code) => format!("failed (code {})\n", code),
+                    None => "failed\n".into(),
+                }.red()
+            },
+            None => "running...\n".to_owned().grey(),
         }))
         .unwrap();
 }
@@ -332,7 +338,7 @@ fn run() -> Result<(), Error> {
         .and_then(|p| Path::new(&p)
             .file_name()
             .and_then(|name| name.to_str())
-            .map(|name| name.to_string())
+            .map(|name| name.to_owned())
         )
         .unwrap_or("congregation".into());
 
@@ -384,7 +390,7 @@ fn run() -> Result<(), Error> {
 
     for task in &running_tasks {
         draw_task_name(&mut stdout, task);
-        draw_task_status(&mut stdout, false);
+        draw_task_status(&mut stdout, task);
     }
     stdout.flush().unwrap();
 
@@ -394,11 +400,12 @@ fn run() -> Result<(), Error> {
         match msg {
             TaskMessage::Stdout { task: id, line } => {
                 if true {
+                    let offset = get_task_tail_offset(&running_tasks, id);
+                    stdout.queue(cursor::MoveUp(offset as u16)).unwrap();
+
                     let task = running_tasks.get_mut(id).unwrap();
                     task.logs.push(line.clone());
 
-                    let offset = get_task_tail_offset(&running_tasks, id);
-                    stdout.queue(cursor::MoveUp(offset as u16)).unwrap();
                     stdout
                         .queue(terminal::Clear(terminal::ClearType::CurrentLine))
                         .unwrap();
@@ -406,7 +413,7 @@ fn run() -> Result<(), Error> {
                         .queue(style::PrintStyledContent("│ ".dark_grey()))
                         .unwrap();
                     stdout.queue(style::Print(line)).unwrap();
-                    draw_task_status(&mut stdout, false);
+                    draw_task_status(&mut stdout, task);
 
                     for task in &running_tasks[id + 1..] {
                         draw_task_name(&mut stdout, task);
@@ -420,22 +427,21 @@ fn run() -> Result<(), Error> {
                                 .unwrap();
                             stdout.queue(style::Print(log)).unwrap();
                         }
-                        draw_task_status(&mut stdout, task.completed);
+                        draw_task_status(&mut stdout, task);
                     }
 
                     stdout.flush().unwrap();
                 }
             }
             TaskMessage::Exited { task: id, status } => {
-                // TODO: handle exit status ^
-
-                let task = running_tasks.get_mut(id).unwrap();
-                task.completed = true;
-                completed_task_count += 1;
-
                 let offset = get_task_tail_offset(&running_tasks, id);
                 stdout.queue(cursor::MoveUp(offset as u16)).unwrap();
-                draw_task_status(&mut stdout, true);
+
+                let task = running_tasks.get_mut(id).unwrap();
+                task.exit_status = Some(status);
+                completed_task_count += 1;
+
+                draw_task_status(&mut stdout, task);
                 stdout.queue(cursor::MoveDown(offset as u16)).unwrap();
                 stdout.flush().unwrap();
 
@@ -445,7 +451,7 @@ fn run() -> Result<(), Error> {
             }
         }
     }
-    
+
     restore_termios(&original_termios);
 
     Ok(())
