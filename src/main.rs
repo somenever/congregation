@@ -1,12 +1,21 @@
-// congregation \
-//   run "npm run dev" -d ./app \
-//   run "npm run start" -d ./api
-
-use std::process::ExitCode;
-use std::fmt::Formatter;
+use crossterm::style::Color;
+use crossterm::{
+    cursor,
+    style::{self, Stylize},
+    terminal, QueueableCommand,
+};
+use indoc::printdoc;
+use nix::sys::signal::Signal;
+use nix::sys::termios::{LocalFlags, Termios};
+use nix::sys::{signal, termios};
+use nix::unistd::Pid;
 use std::fmt::Display;
+use std::fmt::Formatter;
+use std::io::Read;
+use std::path::Path;
+use std::process::Child;
+use std::process::ExitCode;
 use std::sync::{Arc, Mutex};
-use std::io::{stderr, Read};
 use std::{
     env::{self, Args},
     fs::{self},
@@ -16,19 +25,6 @@ use std::{
     process::{Command, ExitStatus, Stdio},
     sync::mpsc::{self, Sender},
 };
-use std::path::Path;
-use std::process::Child;
-use crossterm::{
-    cursor,
-    style::{self, Stylize},
-    terminal, QueueableCommand,
-};
-use crossterm::style::Color;
-use indoc::printdoc;
-use nix::sys::{signal, termios};
-use nix::sys::signal::Signal;
-use nix::sys::termios::{LocalFlags, Termios};
-use nix::unistd::Pid;
 
 #[derive(Debug)]
 struct TaskDef {
@@ -108,7 +104,6 @@ fn print_help(name: &str) {
         -n <name>     Name of the task (used in task header, defaults to working directory or command)
         -c <rrggbb>   Hex RGB color for task name (e.g., ff8800, defaults to white)
     ");
-    std::process::exit(0);
 }
 
 fn parse_task(args: &mut Peekable<Args>, task_count: i32) -> Result<TaskDef, Error> {
@@ -350,6 +345,7 @@ fn run() -> Result<(), Error> {
             matches!(arg.as_str(), "-h" | "--help") || arg.to_lowercase().starts_with("h")
         ) {
             print_help(&name);
+            return Ok(());
         }
 
         tasks.push(parse_task(&mut args, tasks.len() as i32));
@@ -361,9 +357,6 @@ fn run() -> Result<(), Error> {
     for (id, task) in tasks.into_iter().enumerate() {
         running_tasks.push(task?.run(id, tx.clone())?);
     }
-
-    #[cfg(unix)]
-    let original_termios = disable_echoctl();
 
     #[cfg(unix)]
     {
@@ -453,17 +446,24 @@ fn run() -> Result<(), Error> {
         }
     }
 
-    restore_termios(&original_termios);
 
     Ok(())
 }
 
 fn main() -> ExitCode {
-    match run() {
+    #[cfg(unix)]
+    let original_termios = disable_echoctl();
+
+    let exit_code = match run() {
         Ok(_) => ExitCode::SUCCESS,
         Err(error) => {
             eprint!("{error}");
             ExitCode::FAILURE
         }
-    }
+    };
+
+    #[cfg(unix)]
+    restore_termios(&original_termios);
+    
+    exit_code
 }
