@@ -48,14 +48,19 @@ fn parse_task(args: &mut Peekable<Args>, task_count: i32) -> TaskDef {
 
     while args.peek().is_some_and(|arg| arg != "run") {
         match args.next().as_ref().map(|arg| arg.as_str()) {
-            Some("-n") => name = Some(args.next().expect("name after -n")),
-            Some("-d") => workdir = Some(args.next().expect("directory after -d")),
+            Some("-n") => name = Some(args.next().unwrap_or_else(|| error(
+                &format!("invalid syntax (in task {})", task_count + 1),
+                || eprintln!("expected task name after -n"),
+            ))),
+            Some("-d") => workdir = Some(args.next().unwrap_or_else(|| error(
+                &format!("invalid syntax (in task {})", task_count + 1),
+                || eprintln!("expected directory after -d"),
+            ))),
             Some(arg) => error(
                 &format!("invalid syntax (in task {})", task_count + 1),
                 || {
-                    eprintln!("expected -n or -d flags after command, got {arg}");
-                    eprintln!("{}", "note: if your command contains spaces,".dark_grey());
-                    eprintln!("{}", "      please wrap it in quotes".dark_grey());
+                    eprintln!("expected -n <name>, -d <dir>, or run after command, got '{arg}'");
+                    eprintln!("{} {}", "note:".green(), "if your command contains spaces, please wrap it in quotes".grey());
                 },
             ),
             None => unreachable!(),
