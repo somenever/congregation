@@ -377,7 +377,6 @@ fn run() -> Result<(), Error> {
     }
 
     let mut stdout = stdout();
-    let mut stderr = stderr();
 
     if running_tasks.len() == 0 {
         return Err(Error {
@@ -461,7 +460,7 @@ fn main() -> ExitCode {
     match run() {
         Ok(_) => ExitCode::SUCCESS,
         Err(error) => {
-            print!("{error}");
+            eprint!("{error}");
             ExitCode::FAILURE
         }
     }
