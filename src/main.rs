@@ -312,7 +312,7 @@ impl Task {
                 } else {
                     match status.code() {
                         Some(code) => format!("failed (code {})\n", code),
-                        None => "failed\n".into(),
+                        None => "terminated\n".into(),
                     }.red()
                 },
                 None => "running...\n".to_owned().grey(),
