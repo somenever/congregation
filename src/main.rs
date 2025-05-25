@@ -178,6 +178,15 @@ fn draw_task_status(stdout: &mut Stdout, completed: bool) {
         .unwrap();
 }
 
+fn draw_task_name(stdout: &mut Stdout, name: &str) {
+    stdout
+        .queue(terminal::Clear(terminal::ClearType::CurrentLine))
+        .unwrap();
+    stdout
+        .queue(style::Print(format!("{name}\n").bold()))
+        .unwrap();
+}
+
 fn main() {
     let mut args = std::env::args().peekable();
     let name = args.next().unwrap_or("congregation".into());
@@ -208,9 +217,7 @@ fn main() {
     }
 
     for task in &running_tasks {
-        stdout
-            .queue(style::Print(format!("{}\n", task.name)))
-            .unwrap();
+        draw_task_name(&mut stdout, &task.name);
         draw_task_status(&mut stdout, false);
     }
     stdout.flush().unwrap();
@@ -236,12 +243,8 @@ fn main() {
                     draw_task_status(&mut stdout, false);
 
                     for task in &running_tasks[id + 1..] {
-                        stdout
-                            .queue(terminal::Clear(terminal::ClearType::CurrentLine))
-                            .unwrap();
-                        stdout
-                            .queue(style::Print(format!("{}\n", task.name)))
-                            .unwrap();
+                        draw_task_name(&mut stdout, &task.name);
+
                         for log in &task.logs {
                             stdout
                                 .queue(terminal::Clear(terminal::ClearType::CurrentLine))
