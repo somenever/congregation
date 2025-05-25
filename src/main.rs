@@ -60,12 +60,12 @@ impl Display for Error {
         if !self.notes.is_empty() {
             for (i, note) in self.notes.iter().enumerate() {
                 let prefix = "note:";
-                let prefixPadding = " ".repeat(prefix.len());
+                let prefix_padding = " ".repeat(prefix.len());
 
                 if i == 0 {
-                    writeln!(f, "\n{} {}", prefix.green(), note.as_str().grey());
+                    writeln!(f, "\n{} {}", prefix.green(), note.as_str().grey())?;
                 } else {
-                    writeln!(f, "\n{prefixPadding} {}", note.as_str().grey());
+                    writeln!(f, "\n{prefix_padding} {}", note.as_str().grey())?;
                 }
             }
         }
@@ -225,6 +225,14 @@ impl TaskDef {
                     .spawn()
             }
             .unwrap();
+    fn run(self, id: usize, message_channel: Sender<TaskMessage>) -> Result<Task, Error> {
+        let Ok(workdir) = fs::canonicalize(self.workdir) else {
+           return Err(Error {
+               title: "unexpected error".into(),
+               message: "no working directory".into(),
+               ..Error::default()
+           });
+        };
     fn run(self, id: usize, message_channel: Sender<TaskMessage>) -> Result<Task, Error> {
         let Ok(workdir) = fs::canonicalize(self.workdir) else {
            return Err(Error {
