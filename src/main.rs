@@ -18,12 +18,14 @@ use crossterm::{
     style::{self, Stylize},
     terminal, QueueableCommand,
 };
+use crossterm::style::Color;
 
 #[derive(Debug)]
 struct TaskDef {
     command: String,
     name: String,
     workdir: PathBuf,
+    color: Color,
 }
 
 fn error(message: &str, block: impl FnOnce()) -> ! {
@@ -45,6 +47,7 @@ fn parse_task(args: &mut Peekable<Args>, task_count: i32) -> TaskDef {
 
     let mut name = None;
     let mut workdir = None;
+    let mut color = Color::White;
 
     while args.peek().is_some_and(|arg| arg != "run") {
         match args.next().as_ref().map(|arg| arg.as_str()) {
@@ -56,10 +59,39 @@ fn parse_task(args: &mut Peekable<Args>, task_count: i32) -> TaskDef {
                 &format!("invalid syntax (in task {})", task_count + 1),
                 || eprintln!("expected directory after -d"),
             ))),
+            Some("-c") => {
+                let color_arg = args.next().unwrap_or_else(|| error(
+                    &format!("invalid syntax (in task {})", task_count + 1),
+                    || {
+                        eprintln!("expected color after -c");
+                        eprintln!("{} {}", "note:".green(), "color syntax: RRGGBB (hex)".grey());
+                        eprintln!("{}", "      if you have a # symbol, remove it".grey());
+                    },
+                ));
+
+                let invalid_color = || error(
+                    &format!("invalid syntax (in task {})", task_count + 1),
+                    || {
+                        eprintln!("invalid color '{color_arg}'");
+                        eprintln!("{} {}", "note:".green(), "color syntax: 'RRGGBB' (hex)".grey());
+                    },
+                );
+
+                if color_arg.len() != 6 { invalid_color(); }
+
+                let r = u8::from_str_radix(&color_arg[0..2], 16)
+                    .unwrap_or_else(|_| invalid_color());
+                let g = u8::from_str_radix(&color_arg[2..4], 16)
+                    .unwrap_or_else(|_| invalid_color());
+                let b = u8::from_str_radix(&color_arg[4..6], 16)
+                    .unwrap_or_else(|_| invalid_color());
+
+                color = Color::Rgb { r, g, b };
+            },
             Some(arg) => error(
                 &format!("invalid syntax (in task {})", task_count + 1),
                 || {
-                    eprintln!("expected -n <name>, -d <dir>, or run after command, got '{arg}'");
+                    eprintln!("expected -n <name>, -d <dir>, -c <color> or run after command, got '{arg}'");
                     eprintln!("{} {}", "note:".green(), "if your command contains spaces, please wrap it in quotes".grey());
                 },
             ),
@@ -77,6 +109,7 @@ fn parse_task(args: &mut Peekable<Args>, task_count: i32) -> TaskDef {
         workdir: workdir
             .map(|path| PathBuf::from(path))
             .unwrap_or(env::current_dir().unwrap()),
+        color,
     }
 }
 
@@ -90,6 +123,7 @@ struct Task {
     completed: bool,
     name: String,
     logs: Vec<String>,
+    color: Color,
 }
 
 impl TaskDef {
@@ -145,6 +179,7 @@ impl TaskDef {
         });
         Task {
             name: self.name,
+            color: self.color,
             id,
             logs: Vec::new(),
             completed: false,
@@ -178,12 +213,15 @@ fn draw_task_status(stdout: &mut Stdout, completed: bool) {
         .unwrap();
 }
 
-fn draw_task_name(stdout: &mut Stdout, name: &str) {
+fn draw_task_name(stdout: &mut Stdout, task: &Task) {
     stdout
         .queue(terminal::Clear(terminal::ClearType::CurrentLine))
         .unwrap();
+
+    let mut name = format!("{}\n", task.name).bold();
+    name.style_mut().foreground_color = Some(task.color);
     stdout
-        .queue(style::Print(format!("{name}\n").bold()))
+        .queue(style::Print(name))
         .unwrap();
 }
 
@@ -217,7 +255,7 @@ fn main() {
     }
 
     for task in &running_tasks {
-        draw_task_name(&mut stdout, &task.name);
+        draw_task_name(&mut stdout, task);
         draw_task_status(&mut stdout, false);
     }
     stdout.flush().unwrap();
@@ -243,7 +281,7 @@ fn main() {
                     draw_task_status(&mut stdout, false);
 
                     for task in &running_tasks[id + 1..] {
-                        draw_task_name(&mut stdout, &task.name);
+                        draw_task_name(&mut stdout, task);
 
                         for log in &task.logs {
                             stdout
