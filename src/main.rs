@@ -297,38 +297,40 @@ fn get_task_tail_offset(running_tasks: &[Task], id: usize) -> usize {
     offset + 1
 }
 
-fn draw_task_status(stdout: &mut Stdout, task: &Task) {
-    stdout
-        .queue(terminal::Clear(terminal::ClearType::CurrentLine))
-        .unwrap();
-    stdout
-        .queue(style::PrintStyledContent("└ ".dark_grey()))
-        .unwrap();
-    stdout
-        .queue(style::PrintStyledContent(match task.exit_status {
-            Some(status) => if status.success() {
-                "completed\n".to_owned().green()
-            } else {
-                match status.code() {
-                    Some(code) => format!("failed (code {})\n", code),
-                    None => "failed\n".into(),
-                }.red()
-            },
-            None => "running...\n".to_owned().grey(),
-        }))
-        .unwrap();
-}
+impl Task {
+    fn draw_status(&self, stdout: &mut Stdout) {
+        stdout
+            .queue(terminal::Clear(terminal::ClearType::CurrentLine))
+            .unwrap();
+        stdout
+            .queue(style::PrintStyledContent("└ ".dark_grey()))
+            .unwrap();
+        stdout
+            .queue(style::PrintStyledContent(match self.exit_status {
+                Some(status) => if status.success() {
+                    "completed\n".to_owned().green()
+                } else {
+                    match status.code() {
+                        Some(code) => format!("failed (code {})\n", code),
+                        None => "failed\n".into(),
+                    }.red()
+                },
+                None => "running...\n".to_owned().grey(),
+            }))
+            .unwrap();
+    }
 
-fn draw_task_name(stdout: &mut Stdout, task: &Task) {
-    stdout
-        .queue(terminal::Clear(terminal::ClearType::CurrentLine))
-        .unwrap();
+    fn draw_name(&self, stdout: &mut Stdout) {
+        stdout
+            .queue(terminal::Clear(terminal::ClearType::CurrentLine))
+            .unwrap();
 
-    let mut name = format!("{}\n", task.name).bold();
-    name.style_mut().foreground_color = Some(task.color);
-    stdout
-        .queue(style::Print(name))
-        .unwrap();
+        let mut name = format!("{}\n", self.name).bold();
+        name.style_mut().foreground_color = Some(self.color);
+        stdout
+            .queue(style::Print(name))
+            .unwrap();
+    }
 }
 
 fn run() -> Result<(), Error> {
@@ -388,8 +390,8 @@ fn run() -> Result<(), Error> {
     }
 
     for task in &running_tasks {
-        draw_task_name(&mut stdout, task);
-        draw_task_status(&mut stdout, task);
+        task.draw_name(&mut stdout);
+        task.draw_status(&mut stdout);
     }
     stdout.flush().unwrap();
 
@@ -412,10 +414,10 @@ fn run() -> Result<(), Error> {
                         .queue(style::PrintStyledContent("│ ".dark_grey()))
                         .unwrap();
                     stdout.queue(style::Print(line)).unwrap();
-                    draw_task_status(&mut stdout, task);
+                    task.draw_status(&mut stdout);
 
                     for task in &running_tasks[id + 1..] {
-                        draw_task_name(&mut stdout, task);
+                        task.draw_name(&mut stdout);
 
                         for log in &task.logs {
                             stdout
@@ -426,7 +428,7 @@ fn run() -> Result<(), Error> {
                                 .unwrap();
                             stdout.queue(style::Print(log)).unwrap();
                         }
-                        draw_task_status(&mut stdout, task);
+                        task.draw_status(&mut stdout);
                     }
 
                     stdout.flush().unwrap();
@@ -440,7 +442,7 @@ fn run() -> Result<(), Error> {
                 task.exit_status = Some(status);
                 completed_task_count += 1;
 
-                draw_task_status(&mut stdout, task);
+                task.draw_status(&mut stdout);
                 stdout.queue(cursor::MoveDown(offset as u16)).unwrap();
                 stdout.flush().unwrap();
 
