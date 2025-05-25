@@ -74,8 +74,6 @@ impl TaskDef {
     fn run(self, id: usize, message_channel: Sender<TaskMessage>) -> Task {
         let workdir = fs::canonicalize(self.workdir).expect("valid working directory");
         std::thread::spawn(move || {
-            let mut file = File::create(format!("./{id}")).unwrap();
-
             let mut process = if cfg!(windows) {
                 Command::new("cmd.exe")
                     .args(["/C", &self.command])
@@ -102,7 +100,6 @@ impl TaskDef {
                 let size = reader
                     .read_line(&mut line)
                     .expect("failed to read task output");
-                write!(file, "{}", &line).unwrap();
                 if size == 0 {
                     let status = process.wait().unwrap();
                     let _ = message_channel.send(TaskMessage::Exited { task: id, status });
