@@ -12,13 +12,14 @@ use std::{
     process::{Command, ExitStatus, Stdio},
     sync::mpsc::{self, Sender},
 };
-
+use std::path::Path;
 use crossterm::{
     cursor,
     style::{self, Stylize},
     terminal, QueueableCommand,
 };
 use crossterm::style::Color;
+use indoc::printdoc;
 
 #[derive(Debug)]
 struct TaskDef {
@@ -34,10 +35,28 @@ fn error(message: &str, block: impl FnOnce()) -> ! {
     std::process::exit(1)
 }
 
+fn print_help(name: &str) {
+    printdoc!("
+    Run multiple parallel tasks with grouped output
+
+    Usage: {name} <task> [<task> ...]
+
+    Task syntax:
+      run <command> [-d <dir>] [-n <name>] [-c <rrggbb>]
+
+      Options:
+        <command>     The shell command to run (wrap in quotes if it contains spaces)
+        -d <dir>      Working directory for the task (defaults to the current working directory)
+        -n <name>     Name of the task (used in task header, defaults to working directory or command)
+        -c <rrggbb>   Hex RGB color for task name (e.g., ff8800, defaults to white)
+    ");
+    std::process::exit(0);
+}
+
 fn parse_task(args: &mut Peekable<Args>, task_count: i32) -> TaskDef {
     if !args.next().is_some_and(|arg| arg == "run") {
         error("invalid syntax", || {
-            eprintln!("expected 'run' keyword as the first argument");
+            eprintln!("expected 'run' or 'help' as the first argument");
         });
     }
 
@@ -64,6 +83,7 @@ fn parse_task(args: &mut Peekable<Args>, task_count: i32) -> TaskDef {
                     &format!("invalid syntax (in task {})", task_count + 1),
                     || {
                         eprintln!("expected color after -c");
+                        eprintln!();
                         eprintln!("{} {}", "note:".green(), "color syntax: RRGGBB (hex)".grey());
                         eprintln!("{}", "      if you have a # symbol, remove it".grey());
                     },
@@ -73,6 +93,7 @@ fn parse_task(args: &mut Peekable<Args>, task_count: i32) -> TaskDef {
                     &format!("invalid syntax (in task {})", task_count + 1),
                     || {
                         eprintln!("invalid color '{color_arg}'");
+                        eprintln!();
                         eprintln!("{} {}", "note:".green(), "color syntax: 'RRGGBB' (hex)".grey());
                     },
                 );
@@ -92,6 +113,7 @@ fn parse_task(args: &mut Peekable<Args>, task_count: i32) -> TaskDef {
                 &format!("invalid syntax (in task {})", task_count + 1),
                 || {
                     eprintln!("expected -n <name>, -d <dir>, -c <color> or run after command, got '{arg}'");
+                    eprintln!();
                     eprintln!("{} {}", "note:".green(), "if your command contains spaces, please wrap it in quotes".grey());
                 },
             ),
@@ -227,10 +249,23 @@ fn draw_task_name(stdout: &mut Stdout, task: &Task) {
 
 fn main() {
     let mut args = std::env::args().peekable();
-    let name = args.next().unwrap_or("congregation".into());
+    let name = args
+        .next()
+        .and_then(|p| Path::new(&p)
+            .file_name()
+            .and_then(|name| name.to_str())
+            .map(|name| name.to_string())
+        )
+        .unwrap_or("congregation".into());
 
     let mut tasks = Vec::new();
     while args.peek().is_some() {
+        if args.peek().is_some_and(|arg|
+            matches!(arg.as_str(), "-h" | "--help") || arg.to_lowercase().starts_with("h")
+        ) {
+            print_help(&name);
+        }
+
         tasks.push(parse_task(&mut args, tasks.len() as i32));
     }
 
@@ -246,11 +281,14 @@ fn main() {
 
     if running_tasks.len() == 0 {
         error("no tasks specified!", || {
-            eprintln!("please list some commands to execute by using the 'run' keyword:");
+            eprintln!();
+            eprintln!("please list some commands to execute using the 'run' keyword:");
             stderr
                 .queue(style::PrintStyledContent("│ ".dark_grey()))
                 .unwrap();
             eprintln!("{name} run 'echo hello'");
+            eprintln!();
+            eprintln!("{} {}", "note:".green(), format!("run '{name} help' for more information").grey());
         });
     }
 
