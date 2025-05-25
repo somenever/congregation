@@ -2,6 +2,7 @@
 //   run "npm run dev" -d ./app \
 //   run "npm run start" -d ./api
 
+use std::io::Read;
 use std::{
     env::{self, Args},
     fs::{self, File},
@@ -80,17 +81,20 @@ impl TaskDef {
                     .args(["/C", &self.command])
                     .current_dir(workdir)
                     .stdout(Stdio::piped())
+                    .stderr(Stdio::piped())
                     .spawn()
             } else {
                 Command::new("sh")
                     .args(["-c", &self.command])
                     .current_dir(workdir)
                     .stdout(Stdio::piped())
+                    .stderr(Stdio::piped())
                     .spawn()
             }
             .unwrap();
 
-            let stdout = process.stdout.take().unwrap();
+            let stdout = process.stdout.take().unwrap()
+                .chain(process.stderr.take().unwrap());
             let mut reader = BufReader::new(stdout);
             let mut line = String::new();
 
