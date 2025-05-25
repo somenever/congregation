@@ -2,6 +2,8 @@
 //   run "npm run dev" -d ./app \
 //   run "npm run start" -d ./api
 
+use std::fmt::Formatter;
+use std::fmt::Display;
 use std::io::{stderr, Read};
 use std::{
     env::{self, Args},
@@ -33,6 +35,43 @@ fn error(message: &str, block: impl FnOnce()) -> ! {
     eprintln!("{}", message.red());
     block();
     std::process::exit(1)
+#[derive(Default, Debug)]
+struct Error {
+    title: String,
+    message: String,
+    examples: Vec<String>,
+    notes: Vec<String>,
+}
+
+impl Display for Error {
+    fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), std::fmt::Error> {
+        writeln!(f, "{}", self.title.as_str().red())?;
+
+        if self.examples.is_empty() {
+            writeln!(f, "{}", self.message)?;
+        } else {
+            writeln!(f, "")?;
+            writeln!(f, "{}:", self.message)?;
+            for example in &self.examples {
+                writeln!(f, "{} {}", "│ ".dark_grey(), example)?;
+            }
+        }
+
+        if !self.notes.is_empty() {
+            for (i, note) in self.notes.iter().enumerate() {
+                let prefix = "note:";
+                let prefixPadding = " ".repeat(prefix.len());
+
+                if i == 0 {
+                    writeln!(f, "\n{} {}", prefix.green(), note.as_str().grey());
+                } else {
+                    writeln!(f, "\n{prefixPadding} {}", note.as_str().grey());
+                }
+            }
+        }
+
+        Ok(())
+    }
 }
 
 fn print_help(name: &str) {
@@ -53,16 +92,22 @@ fn print_help(name: &str) {
     std::process::exit(0);
 }
 
-fn parse_task(args: &mut Peekable<Args>, task_count: i32) -> TaskDef {
+fn parse_task(args: &mut Peekable<Args>, task_count: i32) -> Result<TaskDef, Error> {
     if !args.next().is_some_and(|arg| arg == "run") {
-        error("invalid syntax", || {
-            eprintln!("expected 'run' or 'help' as the first argument");
+        return Err(Error {
+            title: "invalid syntax".into(),
+            message: "expected 'run' or 'help' as the first argument".into(),
+            ..Error::default()
         });
     }
 
-    let command = args.next().unwrap_or_else(|| error("invalid syntax", || {
-        eprintln!("expected command after 'run' keyword");
-    }));
+    let Some(command) = args.next() else {
+        return Err(Error {
+            title: "invalid syntax".into(),
+            message: "expected command after 'run' keyword".into(),
+            ..Error::default()
+        });
+    };
 
     let mut name = None;
     let mut workdir = None;
@@ -70,58 +115,66 @@ fn parse_task(args: &mut Peekable<Args>, task_count: i32) -> TaskDef {
 
     while args.peek().is_some_and(|arg| arg != "run") {
         match args.next().as_ref().map(|arg| arg.as_str()) {
-            Some("-n") => name = Some(args.next().unwrap_or_else(|| error(
-                &format!("invalid syntax (in task {})", task_count + 1),
-                || eprintln!("expected task name after -n"),
-            ))),
-            Some("-d") => workdir = Some(args.next().unwrap_or_else(|| error(
-                &format!("invalid syntax (in task {})", task_count + 1),
-                || eprintln!("expected directory after -d"),
-            ))),
+            Some("-n") => name = Some(match args.next() {
+                Some(name) => name,
+                None => return Err(Error {
+                    title: format!("invalid syntax (in task {})", task_count + 1),
+                    message: "expected task name after -n".into(),
+                    ..Error::default()
+                }),
+            }),
+            Some("-d") => workdir = Some(match args.next() {
+                Some(name) => name,
+                None => return Err(Error {
+                    title: format!("invalid syntax (in task {})", task_count + 1),
+                    message: "expected directory after -d".into(),
+                    ..Error::default()
+                }),
+            }),
             Some("-c") => {
-                let color_arg = args.next().unwrap_or_else(|| error(
-                    &format!("invalid syntax (in task {})", task_count + 1),
-                    || {
-                        eprintln!("expected color after -c");
-                        eprintln!();
-                        eprintln!("{} {}", "note:".green(), "color syntax: RRGGBB (hex)".grey());
-                        eprintln!("{}", "      if you have a # symbol, remove it".grey());
-                    },
-                ));
+                let Some(color_arg) = args.next() else {
+                    return Err(Error {
+                        title: format!("invalid syntax (in task {})", task_count + 1),
+                        message: "expected color after -c".into(),
+                        notes: vec![
+                            "color syntax: RRGGBB (hex)".into(),
+                            "if you have a # symbol, remove it".into()
+                        ],
+                        ..Error::default()
+                    });
+                };
 
-                let invalid_color = || error(
-                    &format!("invalid syntax (in task {})", task_count + 1),
-                    || {
-                        eprintln!("invalid color '{color_arg}'");
-                        eprintln!();
-                        eprintln!("{} {}", "note:".green(), "color syntax: 'RRGGBB' (hex)".grey());
-                    },
-                );
+                let invalid_color = Error {
+                    title: format!("invalid syntax (in task {})", task_count + 1),
+                    message: format!("invalid color '{color_arg}'"),
+                    notes: vec!["color syntax: RRGGBB (hex)".into()],
+                    ..Error::default()
+                };
 
-                if color_arg.len() != 6 { invalid_color(); }
+                if color_arg.len() != 6 { return Err(invalid_color); }
 
-                let r = u8::from_str_radix(&color_arg[0..2], 16)
-                    .unwrap_or_else(|_| invalid_color());
-                let g = u8::from_str_radix(&color_arg[2..4], 16)
-                    .unwrap_or_else(|_| invalid_color());
-                let b = u8::from_str_radix(&color_arg[4..6], 16)
-                    .unwrap_or_else(|_| invalid_color());
+                let Ok(r) = u8::from_str_radix(&color_arg[0..2], 16)
+                    else { return Err(invalid_color) };
+                let Ok(g) = u8::from_str_radix(&color_arg[2..4], 16)
+                    else { return Err(invalid_color) };
+                let Ok(b) = u8::from_str_radix(&color_arg[4..6], 16)
+                    else { return Err(invalid_color) };
 
                 color = Color::Rgb { r, g, b };
             },
-            Some(arg) => error(
-                &format!("invalid syntax (in task {})", task_count + 1),
-                || {
-                    eprintln!("expected -n <name>, -d <dir>, -c <color> or run after command, got '{arg}'");
-                    eprintln!();
-                    eprintln!("{} {}", "note:".green(), "if your command contains spaces, please wrap it in quotes".grey());
-                },
-            ),
+            Some(arg) => return Err(Error {
+                title: format!("invalid syntax (in task {})", task_count + 1),
+                message: format!("expected -n <name>, -d <dir>, -c <color> or run after command, got '{arg}'"),
+                notes: vec![
+                    "if your command contains spaces, please wrap it in quotes".into()
+                ],
+                ..Error::default()
+            }),
             None => unreachable!(),
         }
     }
 
-    TaskDef {
+    Ok(TaskDef {
         name: name.or_else(|| workdir.clone()).unwrap_or(format!(
             "#{}: {}",
             task_count + 1,
@@ -132,7 +185,7 @@ fn parse_task(args: &mut Peekable<Args>, task_count: i32) -> TaskDef {
             .map(|path| PathBuf::from(path))
             .unwrap_or(env::current_dir().unwrap()),
         color,
-    }
+    })
 }
 
 enum TaskMessage {
@@ -172,20 +225,22 @@ impl TaskDef {
                     .spawn()
             }
             .unwrap();
+    fn run(self, id: usize, message_channel: Sender<TaskMessage>) -> Result<Task, Error> {
+        let Ok(workdir) = fs::canonicalize(self.workdir) else {
+           return Err(Error {
+               title: "unexpected error".into(),
+               message: "no working directory".into(),
+               ..Error::default()
+           });
+        };
 
             let stdout = process.stdout.take().unwrap()
                 .chain(process.stderr.take().unwrap());
             let mut reader = BufReader::new(stdout);
             let mut line = String::new();
 
-            loop {
-                let size = reader
-                    .read_line(&mut line)
-                    .unwrap_or_else(
-                        |_| error(&format!("unexpected error (task {})", id + 1), || {
-                            eprintln!("failed to read task output");
-                        })
-                    );
+                loop {
+                    let size = reader.read_line(&mut line).unwrap();
 
                 if size == 0 {
                     let status = process.wait().unwrap();
@@ -247,7 +302,7 @@ fn draw_task_name(stdout: &mut Stdout, task: &Task) {
         .unwrap();
 }
 
-fn main() {
+fn main() -> Result<(), Error> {
     let mut args = std::env::args().peekable();
     let name = args
         .next()
@@ -273,22 +328,18 @@ fn main() {
 
     let mut running_tasks = Vec::new();
     for (id, task) in tasks.into_iter().enumerate() {
-        running_tasks.push(task.run(id, tx.clone()));
+        running_tasks.push(task?.run(id, tx.clone())?);
     }
 
     let mut stdout = stdout();
     let mut stderr = stderr();
 
     if running_tasks.len() == 0 {
-        error("no tasks specified!", || {
-            eprintln!();
-            eprintln!("please list some commands to execute using the 'run' keyword:");
-            stderr
-                .queue(style::PrintStyledContent("│ ".dark_grey()))
-                .unwrap();
-            eprintln!("{name} run 'echo hello'");
-            eprintln!();
-            eprintln!("{} {}", "note:".green(), format!("run '{name} help' for more information").grey());
+        return Err(Error {
+            title: "no tasks specified!".into(),
+            message: "please list some commands to execute using the 'run' keyword:".into(),
+            examples: vec![format!("{name} run 'echo hello'")],
+            notes: vec![format!("run '{name} help' for more information")],
         });
     }
 
@@ -355,4 +406,6 @@ fn main() {
             }
         }
     }
+    
+    Ok(())
 }
