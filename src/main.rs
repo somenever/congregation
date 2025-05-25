@@ -2,6 +2,7 @@
 //   run "npm run dev" -d ./app \
 //   run "npm run start" -d ./api
 
+use std::process::ExitCode;
 use std::fmt::Formatter;
 use std::fmt::Display;
 use std::io::{stderr, Read};
@@ -414,6 +415,16 @@ fn main() -> Result<(), Error> {
             }
         }
     }
-    
+
     Ok(())
+}
+
+fn main() -> ExitCode {
+    match run() {
+        Ok(_) => ExitCode::SUCCESS,
+        Err(error) => {
+            print!("{error}");
+            ExitCode::FAILURE
+        }
+    }
 }
