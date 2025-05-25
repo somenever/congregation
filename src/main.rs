@@ -2,10 +2,10 @@
 //   run "npm run dev" -d ./app \
 //   run "npm run start" -d ./api
 
-use std::io::Read;
+use std::io::{stderr, Read};
 use std::{
     env::{self, Args},
-    fs::{self, File},
+    fs::{self},
     io::{stdout, BufRead, BufReader, Stdout, Write},
     iter::Peekable,
     path::PathBuf,
@@ -26,12 +26,22 @@ struct TaskDef {
     workdir: PathBuf,
 }
 
+fn error(message: &str, block: impl FnOnce()) -> ! {
+    eprintln!("{}", message.red());
+    block();
+    std::process::exit(1)
+}
+
 fn parse_task(args: &mut Peekable<Args>, task_count: i32) -> TaskDef {
     if !args.next().is_some_and(|arg| arg == "run") {
-        panic!("expected run");
+        error("invalid syntax", || {
+            eprintln!("expected 'run' keyword as the first argument");
+        });
     }
 
-    let command = args.next().expect("command after run");
+    let command = args.next().unwrap_or_else(|| error("invalid syntax", || {
+        eprintln!("expected command after 'run' keyword");
+    }));
 
     let mut name = None;
     let mut workdir = None;
@@ -40,7 +50,14 @@ fn parse_task(args: &mut Peekable<Args>, task_count: i32) -> TaskDef {
         match args.next().as_ref().map(|arg| arg.as_str()) {
             Some("-n") => name = Some(args.next().expect("name after -n")),
             Some("-d") => workdir = Some(args.next().expect("directory after -d")),
-            Some(arg) => panic!("expected -n or -d; got {arg}"),
+            Some(arg) => error(
+                &format!("invalid syntax (in task {})", task_count + 1),
+                || {
+                    eprintln!("expected -n or -d flags after command, got {arg}");
+                    eprintln!("{}", "note: if your command contains spaces,".dark_grey());
+                    eprintln!("{}", "      please wrap it in quotes".dark_grey());
+                },
+            ),
             None => unreachable!(),
         }
     }
@@ -72,7 +89,11 @@ struct Task {
 
 impl TaskDef {
     fn run(self, id: usize, message_channel: Sender<TaskMessage>) -> Task {
-        let workdir = fs::canonicalize(self.workdir).expect("valid working directory");
+        let workdir = fs::canonicalize(self.workdir).unwrap_or_else(
+            |_| error("unexpected error", || {
+                eprintln!("no working directory");
+            })
+        );
         std::thread::spawn(move || {
             let mut process = if cfg!(windows) {
                 Command::new("cmd.exe")
@@ -99,7 +120,12 @@ impl TaskDef {
             loop {
                 let size = reader
                     .read_line(&mut line)
-                    .expect("failed to read task output");
+                    .unwrap_or_else(
+                        |_| error(&format!("unexpected error (task {})", id + 1), || {
+                            eprintln!("failed to read task output");
+                        })
+                    );
+
                 if size == 0 {
                     let status = process.wait().unwrap();
                     let _ = message_channel.send(TaskMessage::Exited { task: id, status });
@@ -149,7 +175,7 @@ fn draw_task_status(stdout: &mut Stdout, completed: bool) {
 
 fn main() {
     let mut args = std::env::args().peekable();
-    args.next();
+    let name = args.next().unwrap_or("congregation".into());
 
     let mut tasks = Vec::new();
     while args.peek().is_some() {
@@ -163,11 +189,18 @@ fn main() {
         running_tasks.push(task.run(id, tx.clone()));
     }
 
-    if running_tasks.len() == 0 {
-        panic!("no tasks specified");
-    }
-
     let mut stdout = stdout();
+    let mut stderr = stderr();
+
+    if running_tasks.len() == 0 {
+        error("no tasks specified!", || {
+            eprintln!("please list some commands to execute by using the 'run' keyword:");
+            stderr
+                .queue(style::PrintStyledContent("│ ".dark_grey()))
+                .unwrap();
+            eprintln!("{name} run 'echo hello'");
+        });
+    }
 
     for task in &running_tasks {
         stdout
