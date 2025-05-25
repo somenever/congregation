@@ -5,6 +5,7 @@
 use std::process::ExitCode;
 use std::fmt::Formatter;
 use std::fmt::Display;
+use std::sync::{Arc, Mutex};
 use std::io::{stderr, Read};
 use std::{
     env::{self, Args},
@@ -16,6 +17,7 @@ use std::{
     sync::mpsc::{self, Sender},
 };
 use std::path::Path;
+use std::process::Child;
 use crossterm::{
     cursor,
     style::{self, Stylize},
@@ -23,6 +25,10 @@ use crossterm::{
 };
 use crossterm::style::Color;
 use indoc::printdoc;
+use nix::sys::{signal, termios};
+use nix::sys::signal::Signal;
+use nix::sys::termios::{LocalFlags, Termios};
+use nix::unistd::Pid;
 
 #[derive(Debug)]
 struct TaskDef {
@@ -32,10 +38,22 @@ struct TaskDef {
     color: Color,
 }
 
-fn error(message: &str, block: impl FnOnce()) -> ! {
-    eprintln!("{}", message.red());
-    block();
-    std::process::exit(1)
+#[cfg(unix)]
+fn disable_echoctl() -> Termios {
+    let original = termios::tcgetattr(std::io::stdin()).unwrap();
+    let mut raw = original.clone();
+
+    raw.local_flags.remove(LocalFlags::ECHOCTL);
+    termios::tcsetattr(std::io::stdin(), termios::SetArg::TCSANOW, &raw).unwrap();
+
+    original
+}
+
+#[cfg(unix)]
+fn restore_termios(original: &Termios) {
+    termios::tcsetattr(std::io::stdin(), termios::SetArg::TCSANOW, original).unwrap();
+}
+
 #[derive(Default, Debug)]
 struct Error {
     title: String,
@@ -54,7 +72,7 @@ impl Display for Error {
             writeln!(f, "")?;
             writeln!(f, "{}:", self.message)?;
             for example in &self.examples {
-                writeln!(f, "{} {}", "│ ".dark_grey(), example)?;
+                writeln!(f, "{} {}", "│".dark_grey(), example)?;
             }
         }
 
@@ -200,40 +218,10 @@ struct Task {
     name: String,
     logs: Vec<String>,
     color: Color,
+    process: Arc<Mutex<Child>>,
 }
 
 impl TaskDef {
-    fn run(self, id: usize, message_channel: Sender<TaskMessage>) -> Task {
-        let workdir = fs::canonicalize(self.workdir).unwrap_or_else(
-            |_| error("unexpected error", || {
-                eprintln!("no working directory");
-            })
-        );
-        std::thread::spawn(move || {
-            let mut process = if cfg!(windows) {
-                Command::new("cmd.exe")
-                    .args(["/C", &self.command])
-                    .current_dir(workdir)
-                    .stdout(Stdio::piped())
-                    .stderr(Stdio::piped())
-                    .spawn()
-            } else {
-                Command::new("sh")
-                    .args(["-c", &self.command])
-                    .current_dir(workdir)
-                    .stdout(Stdio::piped())
-                    .stderr(Stdio::piped())
-                    .spawn()
-            }
-            .unwrap();
-    fn run(self, id: usize, message_channel: Sender<TaskMessage>) -> Result<Task, Error> {
-        let Ok(workdir) = fs::canonicalize(self.workdir) else {
-           return Err(Error {
-               title: "unexpected error".into(),
-               message: "no working directory".into(),
-               ..Error::default()
-           });
-        };
     fn run(self, id: usize, message_channel: Sender<TaskMessage>) -> Result<Task, Error> {
         let Ok(workdir) = fs::canonicalize(self.workdir) else {
            return Err(Error {
@@ -243,33 +231,59 @@ impl TaskDef {
            });
         };
 
-            let stdout = process.stdout.take().unwrap()
-                .chain(process.stderr.take().unwrap());
-            let mut reader = BufReader::new(stdout);
-            let mut line = String::new();
+        let process = Arc::new(Mutex::new(if cfg!(windows) {
+            Command::new("cmd.exe")
+                .args(["/C", &self.command])
+                .current_dir(workdir)
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()
+        } else {
+            Command::new("sh")
+                .args(["-c", &self.command])
+                .current_dir(workdir)
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()
+        }.unwrap()));
+
+        {
+            let process = Arc::clone(&process);
+            std::thread::spawn(move || {
+                let output = {
+                    let mut process = process.lock().unwrap();
+                    process.stdout.take().unwrap()
+                        .chain(process.stderr.take().unwrap())
+                };
+                let mut reader = BufReader::new(output);
+                let mut line = String::new();
 
                 loop {
                     let size = reader.read_line(&mut line).unwrap();
 
-                if size == 0 {
-                    let status = process.wait().unwrap();
-                    let _ = message_channel.send(TaskMessage::Exited { task: id, status });
-                    break;
+                    if size == 0 {
+                        let mut process = process.lock().unwrap();
+                        let status = process.wait().unwrap();
+                        let _ = message_channel.send(TaskMessage::Exited { task: id, status });
+                        break;
+                    }
+                    let _ = message_channel.send(TaskMessage::Stdout {
+                        task: id,
+                        line: line.clone(),
+                    });
+                    line.clear();
                 }
-                let _ = message_channel.send(TaskMessage::Stdout {
-                    task: id,
-                    line: line.clone(),
-                });
-                line.clear();
-            }
-        });
-        Task {
+            });
+        }
+
+        Ok(Task {
             name: self.name,
             color: self.color,
             id,
             logs: Vec::new(),
             completed: false,
-        }
+            process,
+        })
     }
 }
 
@@ -311,7 +325,7 @@ fn draw_task_name(stdout: &mut Stdout, task: &Task) {
         .unwrap();
 }
 
-fn main() -> Result<(), Error> {
+fn run() -> Result<(), Error> {
     let mut args = std::env::args().peekable();
     let name = args
         .next()
@@ -340,13 +354,29 @@ fn main() -> Result<(), Error> {
         running_tasks.push(task?.run(id, tx.clone())?);
     }
 
+    #[cfg(unix)]
+    let original_termios = disable_echoctl();
+
+    #[cfg(unix)]
+    {
+        let processes = running_tasks.iter()
+            .map(|task| Arc::clone(&task.process)).collect::<Vec<_>>();
+
+        let _ = ctrlc::set_handler(move || {
+            for process in &processes {
+                let process = process.lock().unwrap();
+                let _ = signal::kill(Pid::from_raw(process.id() as i32), Signal::SIGINT);
+            }
+        });
+    }
+
     let mut stdout = stdout();
     let mut stderr = stderr();
 
     if running_tasks.len() == 0 {
         return Err(Error {
             title: "no tasks specified!".into(),
-            message: "please list some commands to execute using the 'run' keyword:".into(),
+            message: "please list some commands to execute using the 'run' keyword".into(),
             examples: vec![format!("{name} run 'echo hello'")],
             notes: vec![format!("run '{name} help' for more information")],
         });
@@ -415,6 +445,8 @@ fn main() -> Result<(), Error> {
             }
         }
     }
+    
+    restore_termios(&original_termios);
 
     Ok(())
 }

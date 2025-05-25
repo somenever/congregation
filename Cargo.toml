@@ -6,3 +6,5 @@ edition = "2021"
 [dependencies]
 crossterm = "0.29.0"
 indoc = "2.0.6"
+ctrlc = { version = "3.4.7", features = ["termination"] }
+nix = { version = "=0.30.1", features = ["term"] }
