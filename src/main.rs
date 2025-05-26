@@ -24,7 +24,10 @@ use std::{
 };
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::{Child, Command};
-use tokio::sync::{broadcast::{self, Sender}, Mutex};
+use tokio::sync::{
+    broadcast::{self, Sender},
+    Mutex,
+};
 
 #[derive(Debug)]
 struct TaskDef {
@@ -129,22 +132,30 @@ fn parse_task(args: &mut Peekable<Args>, task_count: i32) -> Result<TaskDef, Err
 
     while args.peek().is_some_and(|arg| arg != "run") {
         match args.next().as_ref().map(|arg| arg.as_str()) {
-            Some("-n") => name = Some(match args.next() {
-                Some(name) => name,
-                None => return Err(Error {
-                    title: format!("invalid syntax (in task {})", task_count + 1),
-                    message: "expected task name after -n".into(),
-                    ..Error::default()
-                }),
-            }),
-            Some("-d") => workdir = Some(match args.next() {
-                Some(name) => name,
-                None => return Err(Error {
-                    title: format!("invalid syntax (in task {})", task_count + 1),
-                    message: "expected directory after -d".into(),
-                    ..Error::default()
-                }),
-            }),
+            Some("-n") => {
+                name = Some(match args.next() {
+                    Some(name) => name,
+                    None => {
+                        return Err(Error {
+                            title: format!("invalid syntax (in task {})", task_count + 1),
+                            message: "expected task name after -n".into(),
+                            ..Error::default()
+                        })
+                    }
+                })
+            }
+            Some("-d") => {
+                workdir = Some(match args.next() {
+                    Some(name) => name,
+                    None => {
+                        return Err(Error {
+                            title: format!("invalid syntax (in task {})", task_count + 1),
+                            message: "expected directory after -d".into(),
+                            ..Error::default()
+                        })
+                    }
+                })
+            }
             Some("-c") => {
                 let Some(color_arg) = args.next() else {
                     return Err(Error {
@@ -152,7 +163,7 @@ fn parse_task(args: &mut Peekable<Args>, task_count: i32) -> Result<TaskDef, Err
                         message: "expected color after -c".into(),
                         notes: vec![
                             "color syntax: RRGGBB (hex)".into(),
-                            "if you have a # symbol, remove it".into()
+                            "if you have a # symbol, remove it".into(),
                         ],
                         ..Error::default()
                     });
@@ -165,23 +176,28 @@ fn parse_task(args: &mut Peekable<Args>, task_count: i32) -> Result<TaskDef, Err
                     ..Error::default()
                 };
 
-                if color_arg.len() != 6 { return Err(invalid_color); }
+                if color_arg.len() != 6 {
+                    return Err(invalid_color);
+                }
 
-                let Ok(r) = u8::from_str_radix(&color_arg[0..2], 16)
-                    else { return Err(invalid_color) };
-                let Ok(g) = u8::from_str_radix(&color_arg[2..4], 16)
-                    else { return Err(invalid_color) };
-                let Ok(b) = u8::from_str_radix(&color_arg[4..6], 16)
-                    else { return Err(invalid_color) };
+                let Ok(r) = u8::from_str_radix(&color_arg[0..2], 16) else {
+                    return Err(invalid_color);
+                };
+                let Ok(g) = u8::from_str_radix(&color_arg[2..4], 16) else {
+                    return Err(invalid_color);
+                };
+                let Ok(b) = u8::from_str_radix(&color_arg[4..6], 16) else {
+                    return Err(invalid_color);
+                };
 
                 color = Color::Rgb { r, g, b };
-            },
+            }
             Some(arg) => return Err(Error {
                 title: format!("invalid syntax (in task {})", task_count + 1),
-                message: format!("expected -n <name>, -d <dir>, -c <color> or run after command, got '{arg}'"),
-                notes: vec![
-                    "if your command contains spaces, please wrap it in quotes".into()
-                ],
+                message: format!(
+                    "expected -n <name>, -d <dir>, -c <color> or run after command, got '{arg}'"
+                ),
+                notes: vec!["if your command contains spaces, please wrap it in quotes".into()],
                 ..Error::default()
             }),
             None => unreachable!(),
@@ -220,28 +236,31 @@ struct Task {
 impl TaskDef {
     async fn run(self, id: usize, message_channel: Sender<TaskMessage>) -> Result<Task, Error> {
         let Ok(workdir) = fs::canonicalize(self.workdir) else {
-           return Err(Error {
-               title: "unexpected error".into(),
-               message: "no working directory".into(),
-               ..Error::default()
-           });
+            return Err(Error {
+                title: "unexpected error".into(),
+                message: "no working directory".into(),
+                ..Error::default()
+            });
         };
 
-        let process = Arc::new(Mutex::new(if cfg!(windows) {
-            Command::new("cmd.exe")
-                .args(["/C", &self.command])
-                .current_dir(workdir)
-                .stdout(Stdio::piped())
-                .stderr(Stdio::piped())
-                .spawn()
-        } else {
-            Command::new("sh")
-                .args(["-c", &self.command])
-                .current_dir(workdir)
-                .stdout(Stdio::piped())
-                .stderr(Stdio::piped())
-                .spawn()
-        }.unwrap()));
+        let process = Arc::new(Mutex::new(
+            if cfg!(windows) {
+                Command::new("cmd.exe")
+                    .args(["/C", &self.command])
+                    .current_dir(workdir)
+                    .stdout(Stdio::piped())
+                    .stderr(Stdio::piped())
+                    .spawn()
+            } else {
+                Command::new("sh")
+                    .args(["-c", &self.command])
+                    .current_dir(workdir)
+                    .stdout(Stdio::piped())
+                    .stderr(Stdio::piped())
+                    .spawn()
+            }
+            .unwrap(),
+        ));
 
         {
             let message_channel = message_channel.clone();
@@ -324,14 +343,17 @@ fn draw_task_status(stdout: &mut Stdout, task: &Task) {
         .unwrap();
     stdout
         .queue(style::PrintStyledContent(match task.exit_status {
-            Some(status) => if status.success() {
-                "completed\n".to_owned().green()
-            } else {
-                match status.code() {
-                    Some(code) => format!("failed (code {})\n", code),
-                    None => "terminated\n".into(),
-                }.red()
-            },
+            Some(status) => {
+                if status.success() {
+                    "completed\n".to_owned().green()
+                } else {
+                    match status.code() {
+                        Some(code) => format!("failed (code {})\n", code),
+                        None => "terminated\n".into(),
+                    }
+                    .red()
+                }
+            }
             None => "running...\n".to_owned().grey(),
         }))
         .unwrap();
@@ -344,27 +366,26 @@ fn draw_task_name(stdout: &mut Stdout, task: &Task) {
 
     let mut name = format!("{}\n", task.name).bold();
     name.style_mut().foreground_color = Some(task.color);
-    stdout
-        .queue(style::Print(name))
-        .unwrap();
+    stdout.queue(style::Print(name)).unwrap();
 }
 
 async fn run() -> Result<(), Error> {
     let mut args = std::env::args().peekable();
     let name = args
         .next()
-        .and_then(|p| Path::new(&p)
-            .file_name()
-            .and_then(|name| name.to_str())
-            .map(|name| name.to_owned())
-        )
+        .and_then(|p| {
+            Path::new(&p)
+                .file_name()
+                .and_then(|name| name.to_str())
+                .map(|name| name.to_owned())
+        })
         .unwrap_or("congregation".into());
 
     let mut tasks = Vec::new();
     while args.peek().is_some() {
-        if args.peek().is_some_and(|arg|
+        if args.peek().is_some_and(|arg| {
             matches!(arg.as_str(), "-h" | "--help") || arg.to_lowercase().starts_with("h")
-        ) {
+        }) {
             print_help(&name);
             return Ok(());
         }
@@ -381,12 +402,17 @@ async fn run() -> Result<(), Error> {
 
     #[cfg(unix)]
     {
-        let processes = running_tasks.iter()
-            .map(|task| Arc::clone(&task.process)).collect::<Vec<_>>();
+        let processes = running_tasks
+            .iter()
+            .map(|task| Arc::clone(&task.process))
+            .collect::<Vec<_>>();
 
         let _ = ctrlc::set_handler(move || {
             for process in &processes {
-                let _ = signal::kill(Pid::from_raw(process.blocking_lock().id().unwrap() as i32), Signal::SIGINT);
+                let _ = signal::kill(
+                    Pid::from_raw(process.blocking_lock().id().unwrap() as i32),
+                    Signal::SIGINT,
+                );
             }
         });
     }
@@ -465,7 +491,6 @@ async fn run() -> Result<(), Error> {
             }
         }
     }
-
 
     Ok(())
 }
