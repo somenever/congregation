@@ -482,7 +482,9 @@ async fn run() -> Result<(), Error> {
                 completed_task_count += 1;
 
                 draw_task_status(&mut stdout, task);
-                stdout.queue(cursor::MoveDown(offset as u16)).unwrap();
+                if offset != 1 {
+                    stdout.queue(cursor::MoveDown(offset as u16 - 1)).unwrap();
+                }
                 stdout.flush().unwrap();
 
                 if completed_task_count == running_tasks.len() {
