@@ -11,20 +11,20 @@ use nix::sys::{signal, termios};
 use nix::unistd::Pid;
 use std::fmt::Display;
 use std::fmt::Formatter;
-use std::io::Read;
 use std::path::Path;
-use std::process::Child;
 use std::process::ExitCode;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::{
     env::{self, Args},
     fs::{self},
-    io::{stdout, BufRead, BufReader, Stdout, Write},
+    io::{stdout, Stdout, Write},
     iter::Peekable,
     path::PathBuf,
-    process::{Command, ExitStatus, Stdio},
-    sync::mpsc::{self, Sender},
+    process::{ExitStatus, Stdio},
 };
+use tokio::io::{AsyncBufReadExt, BufReader};
+use tokio::process::{Child, Command};
+use tokio::sync::{broadcast::{self, Sender}, Mutex};
 
 #[derive(Debug)]
 struct TaskDef {
@@ -202,6 +202,7 @@ fn parse_task(args: &mut Peekable<Args>, task_count: i32) -> Result<TaskDef, Err
     })
 }
 
+#[derive(Clone)]
 enum TaskMessage {
     Stdout { task: usize, line: String },
     Exited { task: usize, status: ExitStatus },
@@ -217,7 +218,7 @@ struct Task {
 }
 
 impl TaskDef {
-    fn run(self, id: usize, message_channel: Sender<TaskMessage>) -> Result<Task, Error> {
+    async fn run(self, id: usize, message_channel: Sender<TaskMessage>) -> Result<Task, Error> {
         let Ok(workdir) = fs::canonicalize(self.workdir) else {
            return Err(Error {
                title: "unexpected error".into(),
@@ -243,25 +244,47 @@ impl TaskDef {
         }.unwrap()));
 
         {
+            let message_channel = message_channel.clone();
             let process = Arc::clone(&process);
-            std::thread::spawn(move || {
-                let output = {
-                    let mut process = process.lock().unwrap();
-                    process.stdout.take().unwrap()
-                        .chain(process.stderr.take().unwrap())
-                };
-                let mut reader = BufReader::new(output);
+            tokio::spawn(async move {
+                let stdout = process.lock().await.stdout.take().unwrap();
+                let mut reader = BufReader::new(stdout);
+
                 let mut line = String::new();
 
                 loop {
-                    let size = reader.read_line(&mut line).unwrap();
+                    let size = reader.read_line(&mut line).await.unwrap();
 
                     if size == 0 {
-                        let mut process = process.lock().unwrap();
-                        let status = process.wait().unwrap();
+                        let status = process.lock().await.wait().await.unwrap();
                         let _ = message_channel.send(TaskMessage::Exited { task: id, status });
                         break;
                     }
+
+                    let _ = message_channel.send(TaskMessage::Stdout {
+                        task: id,
+                        line: line.clone(),
+                    });
+                    line.clear();
+                }
+            });
+        }
+
+        {
+            let process = Arc::clone(&process);
+            tokio::spawn(async move {
+                let stderr = process.lock().await.stderr.take().unwrap();
+                let mut reader = BufReader::new(stderr);
+
+                let mut line = String::new();
+
+                loop {
+                    let size = reader.read_line(&mut line).await.unwrap();
+
+                    if size == 0 {
+                        break;
+                    }
+
                     let _ = message_channel.send(TaskMessage::Stdout {
                         task: id,
                         line: line.clone(),
@@ -326,7 +349,7 @@ fn draw_task_name(stdout: &mut Stdout, task: &Task) {
         .unwrap();
 }
 
-fn run() -> Result<(), Error> {
+async fn run() -> Result<(), Error> {
     let mut args = std::env::args().peekable();
     let name = args
         .next()
@@ -349,11 +372,11 @@ fn run() -> Result<(), Error> {
         tasks.push(parse_task(&mut args, tasks.len() as i32));
     }
 
-    let (tx, rx) = mpsc::channel::<TaskMessage>();
+    let (tx, mut rx) = broadcast::channel::<TaskMessage>(16);
 
     let mut running_tasks = Vec::new();
     for (id, task) in tasks.into_iter().enumerate() {
-        running_tasks.push(task?.run(id, tx.clone())?);
+        running_tasks.push(task?.run(id, tx.clone()).await?);
     }
 
     #[cfg(unix)]
@@ -363,8 +386,7 @@ fn run() -> Result<(), Error> {
 
         let _ = ctrlc::set_handler(move || {
             for process in &processes {
-                let process = process.lock().unwrap();
-                let _ = signal::kill(Pid::from_raw(process.id() as i32), Signal::SIGINT);
+                let _ = signal::kill(Pid::from_raw(process.blocking_lock().id().unwrap() as i32), Signal::SIGINT);
             }
         });
     }
@@ -388,7 +410,7 @@ fn run() -> Result<(), Error> {
 
     let mut completed_task_count = 0;
 
-    for msg in rx {
+    while let Ok(msg) = rx.recv().await {
         match msg {
             TaskMessage::Stdout { task: id, line } => {
                 if true {
@@ -448,11 +470,12 @@ fn run() -> Result<(), Error> {
     Ok(())
 }
 
-fn main() -> ExitCode {
+#[tokio::main]
+async fn main() -> ExitCode {
     #[cfg(unix)]
     let original_termios = disable_echoctl();
 
-    let exit_code = match run() {
+    let exit_code = match run().await {
         Ok(_) => ExitCode::SUCCESS,
         Err(error) => {
             eprint!("{error}");
