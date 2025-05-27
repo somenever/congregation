@@ -4,8 +4,8 @@ version = "0.1.0"
 edition = "2021"
 description = "Run multiple parallel tasks with grouped output"
 license = "MIT"
-readme="README.md"
-homepage="https://github.com/someever/congregation"
+readme = "README.md"
+homepage = "https://github.com/someever/congregation"
 
 [dependencies]
 crossterm = "0.29.0"
