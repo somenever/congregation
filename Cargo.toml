@@ -1,11 +1,10 @@
 [package]
 name = "congregation"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2021"
 description = "Run multiple parallel tasks with grouped output"
 license = "MIT"
-readme = "README.md"
-homepage = "https://github.com/somenever/congregation"
+repository = "https://github.com/somenever/congregation"
 
 [dependencies]
 crossterm = "0.29.0"
