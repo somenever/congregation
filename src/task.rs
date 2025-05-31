@@ -1,13 +1,13 @@
+use crate::diagnostics::Error;
+use crate::TaskDef;
+use crossterm::style::Color;
 use std::fs;
 use std::process::{ExitStatus, Stdio};
 use std::sync::Arc;
-use crossterm::style::Color;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::{Child, Command};
 use tokio::sync::broadcast::Sender;
 use tokio::sync::Mutex;
-use crate::diagnostics::Error;
-use crate::TaskDef;
 
 #[derive(Clone)]
 pub enum TaskMessage {
@@ -30,7 +30,7 @@ impl Task {
         id: usize,
         message_channel: Sender<TaskMessage>,
     ) -> Result<Task, Error> {
-        let Ok(workdir) = fs::canonicalize(def.workdir) else {
+        let Ok(workdir) = dunce::canonicalize(def.workdir) else {
             return Err(Error {
                 title: "unexpected error".into(),
                 message: "no working directory".into(),
