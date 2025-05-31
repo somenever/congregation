@@ -8,10 +8,6 @@ use crate::task::TaskMessage;
 use arg_parser::parse_args;
 use crossterm::style::Color;
 use diagnostics::Error;
-use nix::sys::signal::Signal;
-use nix::sys::termios::{LocalFlags, Termios};
-use nix::sys::{signal, termios};
-use nix::unistd::Pid;
 use std::process::ExitCode;
 use std::sync::Arc;
 use std::{
@@ -19,6 +15,15 @@ use std::{
 };
 use task::Task;
 use tokio::sync::broadcast::{self};
+
+#[cfg(unix)]
+use nix::{
+    sys::{
+        signal::{self, Signal},
+        termios::{self, LocalFlags, Termios}
+    },
+    unistd::Pid
+};
 
 #[derive(Debug)]
 struct TaskDef {
