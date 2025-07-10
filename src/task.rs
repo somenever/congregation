@@ -6,10 +6,11 @@ use std::process::{ExitStatus, Stdio};
 use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::{Child, Command};
-use tokio::sync::broadcast::Sender;
+use tokio::sync::mpsc::Sender;
 use tokio::sync::Mutex;
 
 #[derive(Clone)]
+#[derive(Debug)]
 pub enum TaskMessage {
     Stdout { task: usize, line: String },
     Exited { task: usize, status: ExitStatus },
@@ -71,14 +72,14 @@ impl Task {
 
                     if size == 0 {
                         let status = process.lock().await.wait().await.unwrap();
-                        let _ = message_channel.send(TaskMessage::Exited { task: id, status });
+                        let _ = message_channel.send(TaskMessage::Exited { task: id, status }).await;
                         break;
                     }
 
                     let _ = message_channel.send(TaskMessage::Stdout {
                         task: id,
                         line: line.clone(),
-                    });
+                    }).await;
                     line.clear();
                 }
             });
@@ -102,7 +103,7 @@ impl Task {
                     let _ = message_channel.send(TaskMessage::Stdout {
                         task: id,
                         line: line.clone(),
-                    });
+                    }).await;
                     line.clear();
                 }
             });

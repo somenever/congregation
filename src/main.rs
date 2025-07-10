@@ -14,7 +14,7 @@ use std::{
     path::PathBuf,
 };
 use task::Task;
-use tokio::sync::broadcast::{self};
+use tokio::sync::mpsc;
 
 #[cfg(unix)]
 use nix::{
@@ -55,7 +55,7 @@ async fn run() -> Result<(), Error> {
         return Ok(());
     }
 
-    let (tx, mut rx) = broadcast::channel::<TaskMessage>(16);
+    let (tx, mut rx) = mpsc::channel::<TaskMessage>(32);
 
     let mut running_tasks = Vec::new();
     for (id, task) in tasks.into_iter().enumerate() {
@@ -84,7 +84,7 @@ async fn run() -> Result<(), Error> {
 
     let mut completed_task_count = 0;
 
-    while let Ok(msg) = rx.recv().await {
+    while let Some(msg) = rx.recv().await {
         match msg {
             TaskMessage::Stdout { task: id, line } => {
                 let task = running_tasks.get_mut(id).unwrap();
