@@ -88,11 +88,16 @@ async fn run() -> Result<(), Error> {
     }
 
     #[cfg(unix)]
-    for task in &tasks {
-        let _ = signal::kill(
-            Pid::from_raw(task.process.lock().await.id().unwrap() as i32),
-            Signal::SIGINT,
-        );
+    for task in tasks.iter_mut() {
+        if let Some(process) = task.process.lock().await.id() {
+            let _ = signal::kill(Pid::from_raw(process as i32), Signal::SIGINT);
+        }
+        // Makes task show up as "completed"
+        if task.exit_status.is_none() {
+            use std::process::ExitStatus;
+
+            task.exit_status = Some(ExitStatus::default());
+        }
     }
 
     renderer.leave_screen()?;
