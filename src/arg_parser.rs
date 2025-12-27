@@ -15,6 +15,10 @@ pub fn parse_task(args: &mut Peekable<Args>, task_count: i32) -> Result<TaskDef,
         });
     }
 
+    let mut name = None;
+    let mut workdir = None;
+    let mut color = Color::White;
+
     let Some(command) = args.next() else {
         return Err(Error {
             title: "invalid syntax".into(),
@@ -22,10 +26,6 @@ pub fn parse_task(args: &mut Peekable<Args>, task_count: i32) -> Result<TaskDef,
             ..Error::default()
         });
     };
-
-    let mut name = None;
-    let mut workdir = None;
-    let mut color = Color::White;
 
     while args.peek().is_some_and(|arg| arg != "run") {
         match args.next().as_ref().map(|arg| arg.as_str()) {
@@ -95,7 +95,11 @@ pub fn parse_task(args: &mut Peekable<Args>, task_count: i32) -> Result<TaskDef,
                     message: format!(
                         "expected -n <name>, -d <dir>, -c <color> or run after command, got '{arg}'"
                     ),
-                    notes: vec!["if your command contains spaces, please wrap it in quotes".into()],
+                    notes: vec![
+                        "ensure that the command goes after the 'run' keyword".into(),
+                        "if your command includes spaces, please wrap it in quotes".into(),
+                        format!("the command you provided is: `{command}`"),
+                    ],
                     ..Error::default()
                 })
             }

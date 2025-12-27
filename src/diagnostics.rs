@@ -33,7 +33,7 @@ impl Display for Error {
                 if i == 0 {
                     writeln!(f, "\n{} {}", prefix.green(), note.as_str().grey())?;
                 } else {
-                    writeln!(f, "\n{prefix_padding} {}", note.as_str().grey())?;
+                    writeln!(f, "{prefix_padding} {}", note.as_str().grey())?;
                 }
             }
         }
