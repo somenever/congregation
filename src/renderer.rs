@@ -163,3 +163,9 @@ impl Renderer {
         self.stdout.flush()
     }
 }
+
+impl Drop for Renderer {
+    fn drop(&mut self) {
+        let _ = self.leave_screen();
+    }
+}

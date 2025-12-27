@@ -8,7 +8,7 @@ use crate::task::TaskMessage;
 use arg_parser::parse_args;
 use crossterm::{event::EventStream, style::Color};
 use diagnostics::Error;
-use std::path::PathBuf;
+use std::{path::PathBuf, process::ExitCode};
 use task::Task;
 use tokio::sync::{broadcast, mpsc};
 use tokio_stream::StreamExt;
@@ -27,8 +27,7 @@ struct TaskDef {
     color: Color,
 }
 
-#[tokio::main]
-async fn main() -> Result<(), Error> {
+async fn run() -> Result<(), Error> {
     let tasks = parse_args()?;
     if tasks.is_empty() {
         return Ok(());
@@ -100,4 +99,15 @@ async fn main() -> Result<(), Error> {
     renderer.print_all_tasks(&tasks)?;
 
     Ok(())
+}
+
+#[tokio::main]
+async fn main() -> ExitCode {
+    match run().await {
+        Ok(_) => ExitCode::SUCCESS,
+        Err(error) => {
+            eprint!("{error}");
+            ExitCode::FAILURE
+        }
+    }
 }
