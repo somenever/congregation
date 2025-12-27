@@ -6,11 +6,16 @@ use crossterm::{cursor, execute, queue, style, terminal, QueueableCommand};
 use std::io::{Stdout, Write};
 use std::process::ExitStatus;
 
+const LOG_PREFIX: &str = "│ ";
+
 pub struct Renderer {
     stdout: Stdout,
+    viewport_width: usize,
     viewport_height: usize,
-    scroll: usize,
+    scroll_x: usize,
+    scroll_y: usize,
     line_count: usize,
+    in_screen: bool,
 }
 
 #[derive(Clone)]
@@ -25,21 +30,26 @@ impl Renderer {
     pub fn new() -> Self {
         Self {
             stdout: std::io::stdout(),
-            scroll: 0,
+            scroll_x: 0,
+            scroll_y: 0,
+            viewport_width: 0,
             viewport_height: 0,
             line_count: 0,
+            in_screen: false,
         }
     }
 
     pub fn enter_screen(&mut self) -> std::io::Result<()> {
         execute!(self.stdout, terminal::EnterAlternateScreen, cursor::Hide)?;
         enable_raw_mode()?;
+        self.in_screen = true;
         Ok(())
     }
 
     pub fn leave_screen(&mut self) -> std::io::Result<()> {
         disable_raw_mode()?;
         execute!(self.stdout, terminal::LeaveAlternateScreen, cursor::Show)?;
+        self.in_screen = false;
         Ok(())
     }
 
@@ -48,11 +58,19 @@ impl Renderer {
     }
 
     fn scroll_down(&mut self, amount: usize) {
-        self.scroll = self.scroll_max().min(self.scroll + amount);
+        self.scroll_y = self.scroll_max().min(self.scroll_y + amount);
     }
 
     fn scroll_up(&mut self, amount: usize) {
-        self.scroll = self.scroll.saturating_sub(amount);
+        self.scroll_y = self.scroll_y.saturating_sub(amount);
+    }
+
+    fn scroll_left(&mut self, amount: usize) {
+        self.scroll_x = self.scroll_x.saturating_sub(amount);
+    }
+
+    fn scroll_right(&mut self, amount: usize) {
+        self.scroll_x = self.scroll_x + amount;
     }
 
     pub fn handle_input(&mut self, event: Event) -> bool {
@@ -66,6 +84,8 @@ impl Renderer {
                 KeyCode::Char('u') => self.scroll_up(self.viewport_height),
                 KeyCode::Down | KeyCode::Char('j') => self.scroll_down(1),
                 KeyCode::Up | KeyCode::Char('k') => self.scroll_up(1),
+                KeyCode::Left | KeyCode::Char('h') => self.scroll_left(1),
+                KeyCode::Right | KeyCode::Char('l') => self.scroll_right(1),
                 _ => {}
             },
             _ => {}
@@ -119,10 +139,26 @@ impl Renderer {
                 )?;
             }
             Line::Log(log) => {
+                let scrolled_log = if self.in_screen {
+                    let max_len = self.viewport_width - LOG_PREFIX.len();
+                    if self.scroll_x >= log.len() {
+                        ""
+                    } else if self.scroll_x == 0 && log.len() < max_len {
+                        log
+                    } else {
+                        &log.chars()
+                            .skip(self.scroll_x)
+                            .take(max_len)
+                            .collect::<String>()
+                    }
+                } else {
+                    log
+                };
                 queue!(
                     self.stdout,
-                    style::Print("│ ".dark_grey()),
-                    style::Print(log.trim())
+                    style::Print(LOG_PREFIX.dark_grey()),
+                    style::Print(scrolled_log),
+                    style::SetAttribute(style::Attribute::Reset),
                 )?;
             }
             Line::Empty => {}
@@ -138,20 +174,21 @@ impl Renderer {
             terminal::Clear(ClearType::All)
         )?;
 
-        let (_, height) = terminal::size()?;
+        let (width, height) = terminal::size()?;
+        self.viewport_width = width as usize;
         self.viewport_height = height as usize;
 
         let lines = self.render(tasks);
 
-        let snap_to_bottom = self.scroll == self.scroll_max();
+        let snap_to_bottom = self.scroll_y == self.scroll_max();
         self.line_count = lines.clone().count();
         if snap_to_bottom {
-            self.scroll = self.scroll_max();
+            self.scroll_y = self.scroll_max();
         }
 
         for line in lines
             .chain(std::iter::repeat(Line::Empty))
-            .skip(self.scroll)
+            .skip(self.scroll_y)
             .take(self.viewport_height - 1)
         {
             self.draw_line(line)?;
@@ -161,11 +198,5 @@ impl Renderer {
             concat!("congregation ", env!("CARGO_PKG_VERSION")).dark_grey(),
         ))?;
         self.stdout.flush()
-    }
-}
-
-impl Drop for Renderer {
-    fn drop(&mut self) {
-        let _ = self.leave_screen();
     }
 }

@@ -60,7 +60,7 @@ async fn run() -> Result<(), Error> {
             Some(msg) = rx.recv() => match msg {
                 TaskMessage::Stdout { task: id, line } => {
                     let task = tasks.get_mut(id).unwrap();
-                    task.logs.push(line.clone());
+                    task.logs.push(line.trim().into());
 
                     renderer.draw_tasks(&tasks)?;
                 }
