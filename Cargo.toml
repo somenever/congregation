@@ -1,6 +1,6 @@
 [package]
 name = "congregation"
-version = "0.2.7"
+version = "0.2.8"
 edition = "2021"
 description = "Run multiple parallel tasks with grouped output"
 license = "MIT"

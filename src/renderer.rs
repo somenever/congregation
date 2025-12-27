@@ -75,6 +75,10 @@ impl Renderer {
         self.scroll_x += amount;
     }
 
+    fn scroll_to_end(&mut self) {
+        self.scroll_x = self.longest_line - 1;
+    }
+
     pub fn handle_input(&mut self, event: Event) -> bool {
         match event {
             Event::Key(event) => match event.code {
@@ -82,10 +86,24 @@ impl Renderer {
                     return false
                 }
                 KeyCode::Char('q') => return false,
-                KeyCode::Char('d') => self.scroll_down(self.viewport_height),
-                KeyCode::Char('u') => self.scroll_up(self.viewport_height),
+                KeyCode::Char('d') | KeyCode::PageDown => self.scroll_down(self.viewport_height),
+                KeyCode::Char('u') | KeyCode::PageUp => self.scroll_up(self.viewport_height),
+                KeyCode::Down if event.modifiers.contains(KeyModifiers::CONTROL) => {
+                    self.scroll_down(self.viewport_height)
+                }
+                KeyCode::Up if event.modifiers.contains(KeyModifiers::CONTROL) => {
+                    self.scroll_up(self.viewport_height)
+                }
                 KeyCode::Down | KeyCode::Char('j') => self.scroll_down(1),
                 KeyCode::Up | KeyCode::Char('k') => self.scroll_up(1),
+                KeyCode::Left if event.modifiers.contains(KeyModifiers::CONTROL) => {
+                    self.scroll_x = 0
+                }
+                KeyCode::Home | KeyCode::Char('0') => self.scroll_x = 0,
+                KeyCode::Right if event.modifiers.contains(KeyModifiers::CONTROL) => {
+                    self.scroll_to_end()
+                }
+                KeyCode::End | KeyCode::Char('$') => self.scroll_to_end(),
                 KeyCode::Left | KeyCode::Char('h') => self.scroll_left(1),
                 KeyCode::Right | KeyCode::Char('l') => self.scroll_right(1),
                 _ => {}
@@ -226,9 +244,32 @@ impl Renderer {
             self.draw_line(line)?;
         }
 
-        self.stdout.queue(style::Print(
-            concat!("congregation ", env!("CARGO_PKG_VERSION")).dark_grey(),
-        ))?;
+        queue!(
+            self.stdout,
+            style::Print(format!("{} tasks ", tasks.len()).green())
+        )?;
+
+        let mut print_key = |key: &str, name: &str| {
+            queue!(
+                self.stdout,
+                style::Print(format!(" {key} ").black().on_dark_grey()),
+                style::Print(" "),
+                style::Print(name),
+                style::Print(" "),
+            )
+        };
+        print_key("q", "quit")?;
+        print_key("u", "pgup")?;
+        print_key("d", "pgdown")?;
+        print_key("←↓↑→/hjkl", "navigate")?;
+
+        let version = concat!("congregation ", env!("CARGO_PKG_VERSION"), " ");
+        queue!(
+            self.stdout,
+            cursor::MoveToColumn((self.viewport_width - version.len()) as u16),
+            style::Print(version.dark_grey()),
+        )?;
+
         self.stdout.flush()
     }
 }
