@@ -15,6 +15,7 @@ pub struct Renderer {
     scroll_x: usize,
     scroll_y: usize,
     line_count: usize,
+    longest_line: usize,
     in_screen: bool,
 }
 
@@ -35,6 +36,7 @@ impl Renderer {
             viewport_width: 0,
             viewport_height: 0,
             line_count: 0,
+            longest_line: 0,
             in_screen: false,
         }
     }
@@ -70,7 +72,7 @@ impl Renderer {
     }
 
     fn scroll_right(&mut self, amount: usize) {
-        self.scroll_x = self.scroll_x + amount;
+        self.scroll_x += amount;
     }
 
     pub fn handle_input(&mut self, event: Event) -> bool {
@@ -140,16 +142,41 @@ impl Renderer {
             }
             Line::Log(log) => {
                 let scrolled_log = if self.in_screen {
-                    let max_len = self.viewport_width - LOG_PREFIX.len();
-                    if self.scroll_x >= log.len() {
-                        ""
-                    } else if self.scroll_x == 0 && log.len() < max_len {
+                    let len = log.chars().count();
+                    self.longest_line = self.longest_line.max(len);
+
+                    let mut content_width = self.viewport_width - LOG_PREFIX.len();
+                    let clipped_left = self.scroll_x > 0;
+                    if clipped_left {
+                        content_width -= 1;
+                    }
+                    let clipped_right = len > self.scroll_x + content_width;
+                    if clipped_right {
+                        content_width -= 1;
+                    }
+
+                    if self.scroll_x > len {
+                        &"‹".dark_grey().to_string()
+                    } else if !clipped_left && !clipped_right {
                         log
                     } else {
-                        &log.chars()
-                            .skip(self.scroll_x)
-                            .take(max_len)
-                            .collect::<String>()
+                        &format!(
+                            "{}{}{}",
+                            if clipped_left {
+                                "‹".dark_grey().to_string()
+                            } else {
+                                "".into()
+                            },
+                            log.chars()
+                                .skip(self.scroll_x)
+                                .take(content_width)
+                                .collect::<String>(),
+                            if clipped_right {
+                                "›".dark_grey().to_string()
+                            } else {
+                                "".into()
+                            },
+                        )
                     }
                 } else {
                     log
@@ -158,7 +185,6 @@ impl Renderer {
                     self.stdout,
                     style::Print(LOG_PREFIX.dark_grey()),
                     style::Print(scrolled_log),
-                    style::SetAttribute(style::Attribute::Reset),
                 )?;
             }
             Line::Empty => {}
@@ -186,6 +212,12 @@ impl Renderer {
             self.scroll_y = self.scroll_max();
         }
 
+        self.scroll_x = self.scroll_x.min(
+            self.longest_line
+                .saturating_sub(self.viewport_width - LOG_PREFIX.len() - 1),
+        );
+
+        self.longest_line = 0;
         for line in lines
             .chain(std::iter::repeat(Line::Empty))
             .skip(self.scroll_y)
