@@ -42,6 +42,17 @@ impl Display for Error {
     }
 }
 
+impl From<std::io::Error> for Error {
+    fn from(error: std::io::Error) -> Self {
+        Self {
+            title: "io error".into(),
+            message: error.to_string(),
+            examples: vec![],
+            notes: vec![],
+        }
+    }
+}
+
 pub fn print_help(name: &str) {
     printdoc!("
     Run multiple parallel tasks with grouped output

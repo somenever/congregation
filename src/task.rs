@@ -1,7 +1,6 @@
 use crate::diagnostics::Error;
 use crate::TaskDef;
 use crossterm::style::Color;
-use std::fs;
 use std::process::{ExitStatus, Stdio};
 use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, BufReader};
@@ -9,13 +8,13 @@ use tokio::process::{Child, Command};
 use tokio::sync::mpsc::Sender;
 use tokio::sync::Mutex;
 
-#[derive(Clone)]
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub enum TaskMessage {
     Stdout { task: usize, line: String },
     Exited { task: usize, status: ExitStatus },
 }
 
+#[derive(Debug)]
 pub struct Task {
     pub id: usize,
     pub exit_status: Option<ExitStatus>,
@@ -26,7 +25,7 @@ pub struct Task {
 }
 
 impl Task {
-    pub async fn run(
+    pub fn run(
         def: TaskDef,
         id: usize,
         message_channel: Sender<TaskMessage>,
@@ -72,20 +71,25 @@ impl Task {
 
                     if size == 0 {
                         let status = process.lock().await.wait().await.unwrap();
-                        let _ = message_channel.send(TaskMessage::Exited { task: id, status }).await;
+                        let _ = message_channel
+                            .send(TaskMessage::Exited { task: id, status })
+                            .await;
                         break;
                     }
 
-                    let _ = message_channel.send(TaskMessage::Stdout {
-                        task: id,
-                        line: line.clone(),
-                    }).await;
+                    let _ = message_channel
+                        .send(TaskMessage::Stdout {
+                            task: id,
+                            line: line.clone(),
+                        })
+                        .await;
                     line.clear();
                 }
             });
         }
 
         {
+            let message_channel = message_channel.clone();
             let process = Arc::clone(&process);
             tokio::spawn(async move {
                 let stderr = process.lock().await.stderr.take().unwrap();
@@ -100,10 +104,12 @@ impl Task {
                         break;
                     }
 
-                    let _ = message_channel.send(TaskMessage::Stdout {
-                        task: id,
-                        line: line.clone(),
-                    }).await;
+                    let _ = message_channel
+                        .send(TaskMessage::Stdout {
+                            task: id,
+                            line: line.clone(),
+                        })
+                        .await;
                     line.clear();
                 }
             });
