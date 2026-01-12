@@ -1,4 +1,4 @@
-use crate::{diagnostics::print_help, Error, TaskDef};
+use crate::{diagnostics::print_help, task::TaskDef, Error};
 use crossterm::style::Color;
 use std::{
     env::{self, Args},
@@ -17,7 +17,7 @@ pub fn parse_task(args: &mut Peekable<Args>, task_count: i32) -> Result<TaskDef,
 
     let mut name = None;
     let mut workdir = None;
-    let mut color = Color::White;
+    let mut color = None;
 
     let Some(command) = args.next() else {
         return Err(Error {
@@ -87,7 +87,7 @@ pub fn parse_task(args: &mut Peekable<Args>, task_count: i32) -> Result<TaskDef,
                     return Err(invalid_color);
                 };
 
-                color = Color::Rgb { r, g, b };
+                color = Some(Color::Rgb { r, g, b });
             }
             Some(arg) => {
                 return Err(Error {

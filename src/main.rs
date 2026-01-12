@@ -6,9 +6,9 @@ mod task;
 use crate::renderer::Renderer;
 use crate::task::TaskMessage;
 use arg_parser::parse_args;
-use crossterm::{event::EventStream, style::Color};
+use crossterm::event::EventStream;
 use diagnostics::Error;
-use std::{path::PathBuf, process::ExitCode};
+use std::process::ExitCode;
 use task::Task;
 use tokio::sync::{broadcast, mpsc};
 use tokio_stream::StreamExt;
@@ -18,14 +18,6 @@ use nix::{
     sys::signal::{self, Signal},
     unistd::Pid,
 };
-
-#[derive(Debug)]
-struct TaskDef {
-    command: String,
-    name: String,
-    workdir: PathBuf,
-    color: Color,
-}
 
 async fn run() -> Result<(), Error> {
     let tasks = parse_args()?;

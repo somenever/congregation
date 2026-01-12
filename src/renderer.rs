@@ -21,7 +21,7 @@ pub struct Renderer {
 
 #[derive(Clone)]
 enum Line<'a> {
-    TaskName { name: &'a str, color: Color },
+    TaskName { name: &'a str, color: Option<Color> },
     TaskStatus(Option<ExitStatus>),
     Log(&'a str),
     Empty,
@@ -135,7 +135,7 @@ impl Renderer {
         match line {
             Line::TaskName { name, color } => {
                 let mut name = name.bold();
-                name.style_mut().foreground_color = Some(color);
+                name.style_mut().foreground_color = color;
                 self.stdout.queue(style::Print(name))?;
             }
             Line::TaskStatus(exit_status) => {
@@ -154,7 +154,7 @@ impl Renderer {
                                 .red()
                             }
                         }
-                        None => "running...".to_owned().grey(),
+                        None => "running...".to_owned().green(),
                     })
                 )?;
             }

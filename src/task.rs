@@ -1,6 +1,6 @@
 use crate::diagnostics::Error;
-use crate::TaskDef;
 use crossterm::style::Color;
+use std::path::PathBuf;
 use std::process::{ExitStatus, Stdio};
 use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, BufReader};
@@ -15,12 +15,20 @@ pub enum TaskMessage {
 }
 
 #[derive(Debug)]
+pub struct TaskDef {
+    pub command: String,
+    pub name: String,
+    pub workdir: PathBuf,
+    pub color: Option<Color>,
+}
+
+#[derive(Debug)]
 pub struct Task {
     pub id: usize,
     pub exit_status: Option<ExitStatus>,
     pub name: String,
     pub logs: Vec<String>,
-    pub color: Color,
+    pub color: Option<Color>,
     pub process: Arc<Mutex<Child>>,
 }
 
