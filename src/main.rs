@@ -69,7 +69,7 @@ async fn run() -> Result<(), Error> {
                 }
             },
             Some(Ok(event)) = events.next() => {
-                if !renderer.handle_input(event) {
+                if !renderer.handle_input(event, &mut tasks) {
                     break;
                 }
                 renderer.draw_tasks(&tasks)?;

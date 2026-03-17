@@ -29,6 +29,7 @@ enum Line<'a> {
         id: usize,
         name: &'a str,
         color: Option<Color>,
+        collapsed: bool,
     },
     TaskStatus(usize, Option<ExitStatus>),
     Log(usize, &'a str),
@@ -110,7 +111,7 @@ impl Renderer {
         self.set_cursor_y(self.cursor_y + self.viewport_height);
     }
 
-    pub fn handle_input(&mut self, event: Event) -> bool {
+    pub fn handle_input(&mut self, event: Event, tasks: &mut [Task]) -> bool {
         match event {
             Event::Key(event) => match event.code {
                 KeyCode::Char('c') if event.modifiers.contains(KeyModifiers::CONTROL) => {
@@ -139,6 +140,22 @@ impl Renderer {
                 KeyCode::Right | KeyCode::Char('l') => self.set_cursor_x(self.cursor_x + 1),
                 KeyCode::Home | KeyCode::Char('0') => self.set_cursor_x(0),
                 KeyCode::End | KeyCode::Char('$') => self.set_cursor_x(self.cursor_line_length),
+                KeyCode::Char(' ') => {
+                    if let Some(task) = tasks.get_mut(self.selected_task_id) {
+                        task.collapsed = !task.collapsed;
+
+                        if task.collapsed {
+                            for (idx, line) in self.render(tasks).enumerate() {
+                                if let Line::TaskName { id, .. } = line {
+                                    if id == self.selected_task_id {
+                                        self.set_cursor_y(idx);
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
                 _ => {}
             },
             _ => {}
@@ -152,8 +169,14 @@ impl Renderer {
                 id: task.id,
                 name: &task.name,
                 color: task.color,
+                collapsed: task.collapsed,
             })
-            .chain(task.logs.iter().map(|log| Line::Log(task.id, log)))
+            .chain(
+                (!task.collapsed)
+                    .then(|| task.logs.iter().map(|log| Line::Log(task.id, log)))
+                    .into_iter()
+                    .flatten(),
+            )
             .chain(std::iter::once(Line::TaskStatus(task.id, task.exit_status)))
         })
     }
@@ -168,10 +191,23 @@ impl Renderer {
 
     fn draw_line(&mut self, line: Line) -> std::io::Result<usize> {
         let len = match line {
-            Line::TaskName { name, color, .. } => {
+            Line::TaskName {
+                id,
+                name,
+                color,
+                collapsed,
+            } => {
                 let len = name.len();
                 let mut name = name.bold();
                 name.style_mut().foreground_color = color;
+                if collapsed && self.in_screen {
+                    self.stdout
+                        .queue(style::Print(if id == self.selected_task_id {
+                            "+ ".green()
+                        } else {
+                            "+ ".dark_grey()
+                        }))?;
+                }
                 self.stdout.queue(style::Print(name))?;
                 len
             }
@@ -322,7 +358,7 @@ impl Renderer {
         print_key("d", "pgdown")?;
         print_key("←↓↑→/hjkl", "navigate")?;
 
-        let version = concat!("congregation ", env!("CARGO_PKG_VERSION"), " ");
+        let version = concat!("congregation ", env!("CARGO_PKG_VERSION"));
         queue!(
             self.stdout,
             cursor::MoveToColumn((self.viewport_width - version.len()) as u16),

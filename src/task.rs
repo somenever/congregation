@@ -30,6 +30,7 @@ pub struct Task {
     pub logs: Vec<String>,
     pub color: Option<Color>,
     pub process: Arc<Mutex<Child>>,
+    pub collapsed: bool,
 }
 
 impl Task {
@@ -132,6 +133,7 @@ impl Task {
             logs: Vec::new(),
             exit_status: None,
             process,
+            collapsed: false,
         })
     }
 }
