@@ -120,6 +120,17 @@ impl Renderer {
         self.set_cursor_y(self.cursor_y + self.viewport_height);
     }
 
+    fn jump_to_task_name(&mut self, tasks: &[Task], task_id: usize) {
+        for (idx, line) in self.render(tasks).enumerate() {
+            if let Line::TaskName { id, .. } = line {
+                if id == task_id {
+                    self.set_cursor_y(idx);
+                    break;
+                }
+            }
+        }
+    }
+
     pub fn handle_input(&mut self, event: Event, tasks: &mut [Task]) -> bool {
         match event {
             Event::Key(event) => match event.code {
@@ -128,9 +139,15 @@ impl Renderer {
                 }
                 KeyCode::Char('u') | KeyCode::PageUp => self.page_up(),
                 KeyCode::Char('d') | KeyCode::PageDown => self.page_down(),
-                KeyCode::Up if event.modifiers.contains(KeyModifiers::CONTROL) => self.page_up(),
-                KeyCode::Down if event.modifiers.contains(KeyModifiers::CONTROL) => {
-                    self.page_down()
+                KeyCode::Up | KeyCode::Char('k')
+                    if event.modifiers.contains(KeyModifiers::CONTROL) =>
+                {
+                    self.jump_to_task_name(tasks, self.selected_task_id.saturating_sub(1))
+                }
+                KeyCode::Down | KeyCode::Char('j')
+                    if event.modifiers.contains(KeyModifiers::CONTROL) =>
+                {
+                    self.jump_to_task_name(tasks, self.selected_task_id + 1)
                 }
                 KeyCode::Left if event.modifiers.contains(KeyModifiers::CONTROL) => {
                     self.set_cursor_x(0)
@@ -148,19 +165,12 @@ impl Renderer {
                 KeyCode::Right | KeyCode::Char('l') => self.set_cursor_x(self.cursor_x + 1),
                 KeyCode::Home | KeyCode::Char('0') => self.set_cursor_x(0),
                 KeyCode::End | KeyCode::Char('$') => self.set_cursor_x(self.cursor_line_length),
-                KeyCode::Char(' ') => {
+                KeyCode::Char(' ') | KeyCode::Enter => {
                     if let Some(task) = tasks.get_mut(self.selected_task_id) {
                         task.collapsed = !task.collapsed;
 
                         if task.collapsed {
-                            for (idx, line) in self.render(tasks).enumerate() {
-                                if let Line::TaskName { id, .. } = line {
-                                    if id == self.selected_task_id {
-                                        self.set_cursor_y(idx);
-                                        break;
-                                    }
-                                }
-                            }
+                            self.jump_to_task_name(tasks, self.selected_task_id);
                         }
                     }
                 }

@@ -31,6 +31,8 @@ pub fn render_help_overlay(stdout: &mut Stdout) -> std::io::Result<()> {
         HelpLine::Key(("←↓↑→/hjkl", "move cursor")),
         HelpLine::Key(("u", "pgup")),
         HelpLine::Key(("d", "pgdown")),
+        HelpLine::Key(("ctrl+↑/ctrl+k", "jump to next task")),
+        HelpLine::Key(("ctrl+↓/ctrl+j", "jump to previous task")),
         HelpLine::Key(("q", "quit")),
         HelpLine::Text(""),
         HelpLine::Text("MANAGING TASKS"),
