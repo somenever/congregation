@@ -6,8 +6,15 @@ use crossterm::{cursor, execute, queue, style, terminal, QueueableCommand};
 use std::io::{Stdout, Write};
 use std::process::ExitStatus;
 
+mod help_overlay;
+
 const LOG_PREFIX: &str = "│ ";
 const STATUS_PREFIX: &str = "└ ";
+
+#[derive(PartialEq)]
+enum Overlay {
+    Help,
+}
 
 pub struct Renderer {
     stdout: Stdout,
@@ -21,6 +28,7 @@ pub struct Renderer {
     line_count: usize,
     cursor_line_length: usize,
     in_screen: bool,
+    overlays: Vec<Overlay>,
 }
 
 #[derive(Clone)]
@@ -61,6 +69,7 @@ impl Renderer {
             line_count: 0,
             cursor_line_length: 0,
             in_screen: false,
+            overlays: vec![],
         }
     }
 
@@ -117,7 +126,6 @@ impl Renderer {
                 KeyCode::Char('c') if event.modifiers.contains(KeyModifiers::CONTROL) => {
                     return false
                 }
-                KeyCode::Char('q') => return false,
                 KeyCode::Char('u') | KeyCode::PageUp => self.page_up(),
                 KeyCode::Char('d') | KeyCode::PageDown => self.page_down(),
                 KeyCode::Up if event.modifiers.contains(KeyModifiers::CONTROL) => self.page_up(),
@@ -156,11 +164,35 @@ impl Renderer {
                         }
                     }
                 }
+                KeyCode::Char('?') => self.toggle_overlay(Overlay::Help),
+                KeyCode::Char('q') => {
+                    if self.overlays.len() == 0 {
+                        // TODO: Confirmation popup?
+                        return false;
+                    }
+                    self.overlays.pop();
+                }
+                KeyCode::Esc => {
+                    self.overlays.pop();
+                }
                 _ => {}
             },
             _ => {}
         }
         true
+    }
+
+    fn toggle_overlay(&mut self, overlay: Overlay) {
+        if let Some((index, _)) = self
+            .overlays
+            .iter()
+            .enumerate()
+            .find(|(_, it)| **it == overlay)
+        {
+            self.overlays.remove(index);
+        } else {
+            self.overlays.push(overlay);
+        }
     }
 
     fn render<'a>(&mut self, tasks: &'a [Task]) -> impl Iterator<Item = Line<'a>> + Clone {
@@ -294,6 +326,15 @@ impl Renderer {
         Ok(len)
     }
 
+    fn render_overlays(&mut self) -> std::io::Result<()> {
+        for overlay in &self.overlays {
+            match overlay {
+                Overlay::Help => return help_overlay::render_help_overlay(&mut self.stdout),
+            }
+        }
+        Ok(())
+    }
+
     pub fn draw_tasks(&mut self, tasks: &[Task]) -> std::io::Result<()> {
         queue!(
             self.stdout,
@@ -344,19 +385,9 @@ impl Renderer {
             style::Print(format!("{} tasks ", tasks.len()).green())
         )?;
 
-        let mut print_key = |key: &str, name: &str| {
-            queue!(
-                self.stdout,
-                style::Print(format!(" {key} ").black().on_dark_grey()),
-                style::Print(" "),
-                style::Print(name),
-                style::Print(" "),
-            )
-        };
-        print_key("q", "quit")?;
-        print_key("u", "pgup")?;
-        print_key("d", "pgdown")?;
-        print_key("←↓↑→/hjkl", "navigate")?;
+        help_overlay::print_key(&mut self.stdout, "q", "quit")?;
+        help_overlay::print_key(&mut self.stdout, "←↓↑→/hjkl", "navigate")?;
+        help_overlay::print_key(&mut self.stdout, "?", "help")?;
 
         let version = concat!("congregation ", env!("CARGO_PKG_VERSION"));
         queue!(
@@ -364,6 +395,8 @@ impl Renderer {
             cursor::MoveToColumn((self.viewport_width - version.len()) as u16),
             style::Print(version.dark_grey()),
         )?;
+
+        self.render_overlays()?;
 
         queue!(
             self.stdout,
