@@ -1,10 +1,9 @@
-use crate::task::Task;
+use crate::task::{Task, TaskState};
 use crossterm::event::{Event, KeyCode, KeyModifiers};
 use crossterm::style::{Color, Stylize};
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode, ClearType};
 use crossterm::{cursor, execute, queue, style, terminal, QueueableCommand};
 use std::io::{Stdout, Write};
-use std::process::ExitStatus;
 
 mod help_overlay;
 
@@ -39,7 +38,7 @@ enum Line<'a> {
         color: Option<Color>,
         collapsed: bool,
     },
-    TaskStatus(usize, Option<ExitStatus>),
+    TaskStatus(usize, TaskState),
     Log(usize, &'a str),
     Empty,
 }
@@ -131,11 +130,17 @@ impl Renderer {
         }
     }
 
-    pub fn handle_input(&mut self, event: Event, tasks: &mut [Task]) -> bool {
+    pub fn quit(&mut self, tasks: &mut [Task]) {
+        for task in tasks {
+            task.end_gracefully();
+        }
+    }
+
+    pub fn handle_input(&mut self, event: Event, tasks: &mut [Task]) {
         match event {
             Event::Key(event) => match event.code {
                 KeyCode::Char('c') if event.modifiers.contains(KeyModifiers::CONTROL) => {
-                    return false
+                    self.quit(tasks);
                 }
                 KeyCode::Char('u') | KeyCode::PageUp => self.page_up(),
                 KeyCode::Char('d') | KeyCode::PageDown => self.page_down(),
@@ -177,10 +182,15 @@ impl Renderer {
                 KeyCode::Char('?') => self.toggle_overlay(Overlay::Help),
                 KeyCode::Char('q') => {
                     if self.overlays.len() == 0 {
-                        // TODO: Confirmation popup?
-                        return false;
+                        self.quit(tasks);
+                    } else {
+                        self.overlays.pop();
                     }
-                    self.overlays.pop();
+                }
+                KeyCode::Char('x') => {
+                    if let Some(task) = tasks.get_mut(self.selected_task_id) {
+                        task.end_gracefully();
+                    }
                 }
                 KeyCode::Esc => {
                     self.overlays.pop();
@@ -189,7 +199,6 @@ impl Renderer {
             },
             _ => {}
         }
-        true
     }
 
     fn toggle_overlay(&mut self, overlay: Overlay) {
@@ -219,7 +228,7 @@ impl Renderer {
                     .into_iter()
                     .flatten(),
             )
-            .chain(std::iter::once(Line::TaskStatus(task.id, task.exit_status)))
+            .chain(std::iter::once(Line::TaskStatus(task.id, task.state)))
         })
     }
 
@@ -253,20 +262,12 @@ impl Renderer {
                 self.stdout.queue(style::Print(name))?;
                 len
             }
-            Line::TaskStatus(id, exit_status) => {
-                let status_text = match exit_status {
-                    Some(status) => {
-                        if status.success() {
-                            "completed".to_owned().green()
-                        } else {
-                            match status.code() {
-                                Some(code) => format!("failed (code {})", code),
-                                None => "terminated".into(),
-                            }
-                            .red()
-                        }
-                    }
-                    None => "running...".to_owned().green(),
+            Line::TaskStatus(id, state) => {
+                let status_text = match state {
+                    TaskState::Running => "running...".to_owned().green(),
+                    TaskState::Succeeded => "completed".to_owned().green(),
+                    TaskState::Killed => "terminated".to_owned().red(),
+                    TaskState::Failed(code) => format!("failed (code {})", code).red(),
                 };
                 let len = STATUS_PREFIX.chars().count() + status_text.content().chars().count();
                 queue!(

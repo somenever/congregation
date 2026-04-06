@@ -1,17 +1,23 @@
 use crate::diagnostics::Error;
 use crossterm::style::Color;
 use std::path::PathBuf;
-use std::process::{ExitStatus, Stdio};
-use std::sync::Arc;
+use std::process::Stdio;
 use tokio::io::{AsyncBufReadExt, BufReader};
-use tokio::process::{Child, Command};
+use tokio::process::Command;
 use tokio::sync::mpsc::Sender;
-use tokio::sync::Mutex;
 
 #[derive(Clone, Debug)]
 pub enum TaskMessage {
     Stdout { task: usize, line: String },
-    Exited { task: usize, status: ExitStatus },
+    Exited { task: usize, state: TaskState },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum TaskState {
+    Running,
+    Succeeded,
+    Failed(i32),
+    Killed,
 }
 
 #[derive(Debug)]
@@ -25,11 +31,11 @@ pub struct TaskDef {
 #[derive(Debug)]
 pub struct Task {
     pub id: usize,
-    pub exit_status: Option<ExitStatus>,
+    pub state: TaskState,
     pub name: String,
     pub logs: Vec<String>,
     pub color: Option<Color>,
-    pub process: Arc<Mutex<Child>>,
+    pub pid: u32,
     pub collapsed: bool,
 }
 
@@ -47,47 +53,42 @@ impl Task {
             });
         };
 
-        let process = Arc::new(Mutex::new(
-            if cfg!(windows) {
+        let mut process = {
+            #[cfg(windows)]
+            {
+                use windows_sys::Win32::System::Threading::CREATE_NEW_PROCESS_GROUP;
+
                 Command::new("cmd.exe")
                     .args(["/C", &def.command])
                     .current_dir(workdir)
                     .stdin(Stdio::null())
                     .stdout(Stdio::piped())
                     .stderr(Stdio::piped())
+                    .creation_flags(CREATE_NEW_PROCESS_GROUP)
                     .spawn()
-            } else {
-                Command::new("sh")
-                    .args(["-c", &def.command])
-                    .current_dir(workdir)
-                    .stdin(Stdio::null())
-                    .stdout(Stdio::piped())
-                    .stderr(Stdio::piped())
-                    .spawn()
+                    .unwrap()
             }
-            .unwrap(),
-        ));
+
+            #[cfg(not(windows))]
+            Command::new("sh")
+                .args(["-c", &def.command])
+                .current_dir(workdir)
+                .stdin(Stdio::null())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()
+                .unwrap()
+        };
+        let pid = process.id().unwrap();
 
         {
             let message_channel = message_channel.clone();
-            let process = Arc::clone(&process);
+            let stdout = process.stdout.take().unwrap();
             tokio::spawn(async move {
-                let stdout = process.lock().await.stdout.take().unwrap();
                 let mut reader = BufReader::new(stdout);
-
                 let mut line = String::new();
 
-                loop {
-                    let size = reader.read_line(&mut line).await.unwrap();
-
-                    if size == 0 {
-                        let status = process.lock().await.wait().await.unwrap();
-                        let _ = message_channel
-                            .send(TaskMessage::Exited { task: id, status })
-                            .await;
-                        break;
-                    }
-
+                while reader.read_line(&mut line).await.unwrap() != 0 {
                     let _ = message_channel
                         .send(TaskMessage::Stdout {
                             task: id,
@@ -101,20 +102,12 @@ impl Task {
 
         {
             let message_channel = message_channel.clone();
-            let process = Arc::clone(&process);
+            let stderr = process.stderr.take().unwrap();
             tokio::spawn(async move {
-                let stderr = process.lock().await.stderr.take().unwrap();
                 let mut reader = BufReader::new(stderr);
-
                 let mut line = String::new();
 
-                loop {
-                    let size = reader.read_line(&mut line).await.unwrap();
-
-                    if size == 0 {
-                        break;
-                    }
-
+                while reader.read_line(&mut line).await.unwrap() != 0 {
                     let _ = message_channel
                         .send(TaskMessage::Stdout {
                             task: id,
@@ -123,6 +116,23 @@ impl Task {
                         .await;
                     line.clear();
                 }
+            });
+        }
+
+        {
+            let message_channel = message_channel.clone();
+            tokio::spawn(async move {
+                let status = process.wait().await.unwrap();
+                let _ = message_channel
+                    .send(TaskMessage::Exited {
+                        task: id,
+                        state: match status.code() {
+                            Some(0) => TaskState::Succeeded,
+                            Some(code) => TaskState::Failed(code),
+                            None => TaskState::Killed,
+                        },
+                    })
+                    .await;
             });
         }
 
@@ -131,9 +141,38 @@ impl Task {
             color: def.color,
             id,
             logs: Vec::new(),
-            exit_status: None,
-            process,
+            state: TaskState::Running,
+            pid,
             collapsed: false,
         })
+    }
+
+    pub fn is_running(&self) -> bool {
+        self.state == TaskState::Running
+    }
+
+    pub fn end_gracefully(&mut self) {
+        if !self.is_running() {
+            return;
+        }
+
+        #[cfg(windows)]
+        {
+            use windows_sys::Win32::System::Console::{GenerateConsoleCtrlEvent, CTRL_C_EVENT};
+
+            unsafe {
+                GenerateConsoleCtrlEvent(CTRL_C_EVENT, self.pid);
+            }
+        }
+
+        #[cfg(unix)]
+        {
+            use nix::{
+                sys::signal::{self, Signal},
+                unistd::Pid,
+            };
+
+            signal::kill(Pid::from_raw(self.pid as i32), Signal::SIGTERM).unwrap();
+        }
     }
 }

@@ -13,12 +13,6 @@ use task::Task;
 use tokio::sync::{broadcast, mpsc};
 use tokio_stream::StreamExt;
 
-#[cfg(unix)]
-use nix::{
-    sys::signal::{self, Signal},
-    unistd::Pid,
-};
-
 async fn run() -> Result<(), Error> {
     let tasks = parse_args()?;
     if tasks.is_empty() {
@@ -56,39 +50,26 @@ async fn run() -> Result<(), Error> {
 
                     renderer.draw_tasks(&tasks)?;
                 }
-                TaskMessage::Exited { task: id, status } => {
+                TaskMessage::Exited { task: id, state } => {
                     let task = tasks.get_mut(id).unwrap();
-                    task.exit_status = Some(status);
-                    completed_task_count += 1;
 
+                    if task.is_running() {
+                        task.state = state;
+                    }
                     renderer.draw_tasks(&tasks)?;
 
+                    completed_task_count += 1;
                     if completed_task_count == tasks.len() {
                         break;
                     }
                 }
             },
             Some(Ok(event)) = events.next() => {
-                if !renderer.handle_input(event, &mut tasks) {
-                    break;
-                }
+                renderer.handle_input(event, &mut tasks);
                 renderer.draw_tasks(&tasks)?;
             }
             Ok(()) = interrupt_rx.recv() => break,
             else => break
-        }
-    }
-
-    #[cfg(unix)]
-    for task in tasks.iter_mut() {
-        if let Some(process) = task.process.lock().await.id() {
-            let _ = signal::kill(Pid::from_raw(process as i32), Signal::SIGINT);
-        }
-        // Makes task show up as "completed"
-        if task.exit_status.is_none() {
-            use std::process::ExitStatus;
-
-            task.exit_status = Some(ExitStatus::default());
         }
     }
 
