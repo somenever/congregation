@@ -16,8 +16,9 @@ pub enum TaskMessage {
 pub enum TaskState {
     Running,
     Succeeded,
+    Stopped,
     Failed(i32),
-    Killed,
+    Killed(&'static str),
 }
 
 #[derive(Debug)]
@@ -76,6 +77,7 @@ impl Task {
                 .stdin(Stdio::null())
                 .stdout(Stdio::piped())
                 .stderr(Stdio::piped())
+                .process_group(0)
                 .spawn()
                 .unwrap()
         };
@@ -128,8 +130,28 @@ impl Task {
                         task: id,
                         state: match status.code() {
                             Some(0) => TaskState::Succeeded,
+                            #[cfg(unix)]
+                            Some(130) => TaskState::Stopped, // SIGINT exit code
+                            #[cfg(windows)]
+                            Some(0xC000013A) => TaskState::Stopped, // STATUS_CONTROL_C_EXIT
                             Some(code) => TaskState::Failed(code),
-                            None => TaskState::Killed,
+
+                            #[cfg(unix)]
+                            None => {
+                                use nix::sys::signal::Signal;
+                                use std::os::unix::process::ExitStatusExt;
+
+                                let signal = Signal::try_from(status.signal().unwrap()).unwrap();
+
+                                if signal == Signal::SIGINT {
+                                    TaskState::Stopped
+                                } else {
+                                    TaskState::Killed(signal.as_str())
+                                }
+                            }
+
+                            #[cfg(not(unix))]
+                            None => unreachable!(),
                         },
                     })
                     .await;
@@ -172,7 +194,7 @@ impl Task {
                 unistd::Pid,
             };
 
-            signal::kill(Pid::from_raw(self.pid as i32), Signal::SIGTERM).unwrap();
+            signal::kill(Pid::from_raw(-(self.pid as i32)), Signal::SIGINT).unwrap();
         }
     }
 }

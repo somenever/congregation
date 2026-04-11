@@ -266,8 +266,9 @@ impl Renderer {
                 let status_text = match state {
                     TaskState::Running => "running...".to_owned().green(),
                     TaskState::Succeeded => "completed".to_owned().green(),
-                    TaskState::Killed => "terminated".to_owned().red(),
-                    TaskState::Failed(code) => format!("failed (code {})", code).red(),
+                    TaskState::Stopped => "stopped".to_owned().green(),
+                    TaskState::Killed(signal) => format!("killed ({signal})").red(),
+                    TaskState::Failed(code) => format!("failed (code {code})").red(),
                 };
                 let len = STATUS_PREFIX.chars().count() + status_text.content().chars().count();
                 queue!(
