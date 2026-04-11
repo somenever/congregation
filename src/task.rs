@@ -47,8 +47,8 @@ impl Task {
     ) -> Result<Task, Error> {
         let Ok(workdir) = dunce::canonicalize(def.workdir) else {
             return Err(Error {
-                title: "unexpected error".into(),
-                message: "no working directory".into(),
+                title: format!("error running task '{}'", def.name),
+                message: "invalid working directory".into(),
                 ..Error::default()
             });
         };
