@@ -215,7 +215,9 @@ impl Renderer {
     }
 
     fn render<'a>(&mut self, tasks: &'a [Task]) -> impl Iterator<Item = Line<'a>> + Clone {
-        tasks.iter().flat_map(|task| {
+        let in_screen = self.in_screen;
+
+        tasks.iter().flat_map(move |task| {
             std::iter::once(Line::TaskName {
                 id: task.id,
                 name: &task.name,
@@ -223,7 +225,7 @@ impl Renderer {
                 collapsed: task.collapsed,
             })
             .chain(
-                (!task.collapsed)
+                (!task.collapsed || !in_screen)
                     .then(|| task.logs.iter().map(|log| Line::Log(task.id, log)))
                     .into_iter()
                     .flatten(),
