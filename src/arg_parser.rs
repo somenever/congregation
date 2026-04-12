@@ -7,10 +7,12 @@ use std::{
 };
 
 pub fn parse_task(args: &mut Peekable<Args>, task_count: i32) -> Result<TaskDef, Error> {
+    let error_title = || format!("invalid syntax (in task {})", task_count + 1);
+
     if !args.next().is_some_and(|arg| arg == "run") {
         return Err(Error {
-            title: "invalid syntax".into(),
-            message: "expected 'run' or 'help' as the first argument".into(),
+            title: error_title(),
+            message: "expected 'run'".into(),
             ..Error::default()
         });
     }
@@ -19,44 +21,36 @@ pub fn parse_task(args: &mut Peekable<Args>, task_count: i32) -> Result<TaskDef,
     let mut workdir = None;
     let mut color = None;
 
-    let Some(command) = args.next() else {
-        return Err(Error {
-            title: "invalid syntax".into(),
-            message: "expected command after 'run' keyword".into(),
-            ..Error::default()
-        });
-    };
-
-    while args.peek().is_some_and(|arg| arg != "run") {
-        match args.next().as_ref().map(|arg| arg.as_str()) {
-            Some("-n") => {
+    let mut parse_flag = |args: &mut Peekable<Args>, flag: &str| {
+        match flag {
+            "-n" => {
                 name = Some(match args.next() {
                     Some(name) => name,
                     None => {
                         return Err(Error {
-                            title: format!("invalid syntax (in task {})", task_count + 1),
+                            title: error_title(),
                             message: "expected task name after -n".into(),
                             ..Error::default()
                         })
                     }
-                })
+                });
             }
-            Some("-d") => {
+            "-d" => {
                 workdir = Some(match args.next() {
                     Some(name) => name,
                     None => {
                         return Err(Error {
-                            title: format!("invalid syntax (in task {})", task_count + 1),
+                            title: error_title(),
                             message: "expected directory after -d".into(),
                             ..Error::default()
                         })
                     }
-                })
+                });
             }
-            Some("-c") => {
+            "-c" => {
                 let Some(color_arg) = args.next() else {
                     return Err(Error {
-                        title: format!("invalid syntax (in task {})", task_count + 1),
+                        title: error_title(),
                         message: "expected color after -c".into(),
                         notes: vec![
                             "color syntax: RRGGBB (hex)".into(),
@@ -67,7 +61,7 @@ pub fn parse_task(args: &mut Peekable<Args>, task_count: i32) -> Result<TaskDef,
                 };
 
                 let invalid_color = Error {
-                    title: format!("invalid syntax (in task {})", task_count + 1),
+                    title: error_title(),
                     message: format!("invalid color '{color_arg}'"),
                     notes: vec!["color syntax: RRGGBB (hex)".into()],
                     ..Error::default()
@@ -89,21 +83,41 @@ pub fn parse_task(args: &mut Peekable<Args>, task_count: i32) -> Result<TaskDef,
 
                 color = Some(Color::Rgb { r, g, b });
             }
-            Some(arg) => {
+            _ => {
                 return Err(Error {
-                    title: format!("invalid syntax (in task {})", task_count + 1),
-                    message: format!(
-                        "expected -n <name>, -d <dir>, -c <color> or run after command, got '{arg}'"
-                    ),
-                    notes: vec![
-                        "ensure that the command goes after the 'run' keyword".into(),
-                        "if your command includes spaces, please wrap it in quotes".into(),
-                        format!("the command you provided is: `{command}`"),
-                    ],
+                    title: error_title(),
+                    message: format!("unknown flag {flag}"),
                     ..Error::default()
-                })
+                });
             }
-            None => unreachable!(),
+        }
+        Ok(())
+    };
+
+    while args.peek().is_some_and(|arg| arg.starts_with('-')) {
+        let flag = args.next().unwrap();
+        parse_flag(args, &flag)?;
+    }
+
+    let Some(command) = args.next() else {
+        return Err(Error {
+            title: error_title(),
+            message: "expected command after 'run' keyword".into(),
+            ..Error::default()
+        });
+    };
+
+    while args.peek().is_some_and(|arg| arg != "run") {
+        let arg = args.next().unwrap();
+        if arg.starts_with('-') {
+            parse_flag(args, &arg)?;
+        } else {
+            return Err(Error {
+                title: error_title(),
+                message: format!("expected '-n <name>', '-d <dir>', '-c <color>' or 'run' after command, got '{arg}'"),
+                notes: vec!["if your command includes spaces, please wrap it in quotes".into()],
+                ..Error::default()
+            });
         }
     }
 
