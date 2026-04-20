@@ -3,7 +3,7 @@ use crossterm::style::Color;
 use std::path::PathBuf;
 use std::process::Stdio;
 use tokio::io::{AsyncBufReadExt, BufReader};
-use tokio::process::Command;
+use tokio::process::{ChildStdin, Command};
 use tokio::sync::mpsc::Sender;
 
 #[derive(Clone, Debug)]
@@ -38,6 +38,7 @@ pub struct Task {
     pub color: Option<Color>,
     pub pid: u32,
     pub collapsed: bool,
+    pub stdin: Option<ChildStdin>,
 }
 
 impl Task {
@@ -62,7 +63,7 @@ impl Task {
                 Command::new("cmd.exe")
                     .args(["/C", &def.command])
                     .current_dir(workdir)
-                    .stdin(Stdio::null())
+                    .stdin(Stdio::piped())
                     .stdout(Stdio::piped())
                     .stderr(Stdio::piped())
                     .creation_flags(CREATE_NEW_PROCESS_GROUP)
@@ -82,6 +83,7 @@ impl Task {
                 .unwrap()
         };
         let pid = process.id().unwrap();
+        let stdin = process.stdin.take();
 
         {
             let message_channel = message_channel.clone();
@@ -124,16 +126,23 @@ impl Task {
         {
             let message_channel = message_channel.clone();
             tokio::spawn(async move {
+                #[cfg(windows)]
+                const STATUS_CONTROL_C_EXIT: i32 = 0xC000013Au32 as i32;
+
                 let status = process.wait().await.unwrap();
                 let _ = message_channel
                     .send(TaskMessage::Exited {
                         task: id,
                         state: match status.code() {
                             Some(0) => TaskState::Succeeded,
+
                             #[cfg(unix)]
                             Some(130) => TaskState::Stopped, // SIGINT exit code
                             #[cfg(windows)]
-                            Some(0xC000013A) => TaskState::Stopped, // STATUS_CONTROL_C_EXIT
+                            Some(STATUS_CONTROL_C_EXIT) => TaskState::Stopped,
+                            #[cfg(windows)]
+                            Some(255) => TaskState::Stopped,
+
                             Some(code) => TaskState::Failed(code),
 
                             #[cfg(unix)]
@@ -166,6 +175,7 @@ impl Task {
             state: TaskState::Running,
             pid,
             collapsed: false,
+            stdin,
         })
     }
 
@@ -180,10 +190,16 @@ impl Task {
 
         #[cfg(windows)]
         {
-            use windows_sys::Win32::System::Console::{GenerateConsoleCtrlEvent, CTRL_C_EVENT};
+            use windows_sys::Win32::System::Console::{GenerateConsoleCtrlEvent, CTRL_BREAK_EVENT};
 
             unsafe {
-                GenerateConsoleCtrlEvent(CTRL_C_EVENT, self.pid);
+                GenerateConsoleCtrlEvent(CTRL_BREAK_EVENT, self.pid);
+                if let Some(mut stdin) = self.stdin.take() {
+                    use tokio::io::AsyncWriteExt;
+                    tokio::spawn(async move {
+                        stdin.write_all(b"Y\n").await.unwrap();
+                    });
+                }
             }
         }
 
