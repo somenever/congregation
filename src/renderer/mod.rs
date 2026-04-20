@@ -1,5 +1,5 @@
 use crate::task::{Task, TaskState};
-use crossterm::event::{Event, KeyCode, KeyModifiers};
+use crossterm::event::{Event, KeyCode, KeyEventKind, KeyModifiers};
 use crossterm::style::{Color, Stylize};
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode, ClearType};
 use crossterm::{cursor, execute, queue, style, terminal, QueueableCommand};
@@ -138,7 +138,7 @@ impl Renderer {
 
     pub fn handle_input(&mut self, event: Event, tasks: &mut [Task]) {
         match event {
-            Event::Key(event) => match event.code {
+            Event::Key(event) if event.kind == KeyEventKind::Press => match event.code {
                 KeyCode::Char('c') if event.modifiers.contains(KeyModifiers::CONTROL) => {
                     self.quit(tasks);
                 }
