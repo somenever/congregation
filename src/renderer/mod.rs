@@ -352,6 +352,7 @@ impl Renderer {
     pub fn draw_tasks(&mut self, tasks: &[Task]) -> std::io::Result<()> {
         queue!(
             self.stdout,
+            terminal::BeginSynchronizedUpdate,
             cursor::MoveTo(0, 0),
             terminal::Clear(ClearType::All)
         )?;
@@ -417,7 +418,8 @@ impl Renderer {
             cursor::MoveTo(
                 (self.cursor_x - self.scroll_x) as u16,
                 (self.cursor_y - self.scroll_y) as u16
-            )
+            ),
+            terminal::EndSynchronizedUpdate,
         )?;
 
         self.stdout.flush()
