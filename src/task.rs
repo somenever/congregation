@@ -1,59 +1,118 @@
-use crate::diagnostics::Error;
-use crossterm::style::Color;
+use crossterm::style::{Color, StyledContent, Stylize};
 use std::path::PathBuf;
 use std::process::Stdio;
+use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::{ChildStdin, Command};
 use tokio::sync::mpsc::Sender;
+use tokio::sync::oneshot;
 
 #[derive(Clone, Debug)]
-pub enum TaskMessage {
-    Stdout { task: usize, line: String },
-    Exited { task: usize, state: TaskState },
+pub enum TaskMessageKind {
+    Stdout(String),
+    Exited(TaskExitReason),
+    Restarting(u32),
+    Restart,
+}
+
+#[derive(Clone, Debug)]
+pub struct TaskMessage {
+    pub task: usize,
+    pub kind: TaskMessageKind,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub enum TaskState {
-    Running,
+pub enum TaskExitReason {
     Succeeded,
-    Stopped,
     Failed(i32),
     Killed(&'static str),
 }
 
 #[derive(Debug)]
+pub enum TaskState {
+    Running {
+        pid: u32,
+        stdin: Option<ChildStdin>,
+    },
+    Stopped,
+    Exited(TaskExitReason),
+    Restarting {
+        exit_reason: TaskExitReason,
+        remaining_secs: u32,
+        cancel_tx: oneshot::Sender<()>,
+    },
+    ForceRestarting,
+}
+
+impl TaskExitReason {
+    pub fn render(&self) -> StyledContent<String> {
+        match self {
+            TaskExitReason::Succeeded => "completed".to_owned().green(),
+            TaskExitReason::Killed(signal) => format!("killed ({signal})").red(),
+            TaskExitReason::Failed(code) => format!("failed (code {code})").red(),
+        }
+    }
+}
+
+impl TaskState {
+    pub fn render(&self) -> StyledContent<String> {
+        match self {
+            TaskState::Running { .. } => "running...".to_owned().green(),
+            TaskState::Stopped => "stopped".to_owned().green(),
+            TaskState::Exited(reason) => reason.render(),
+            TaskState::Restarting {
+                exit_reason,
+                remaining_secs,
+                ..
+            } => format!(
+                "{}: restarting in {remaining_secs}s...",
+                exit_reason.render().content()
+            )
+            .yellow(),
+            TaskState::ForceRestarting => "restarting...".to_owned().yellow(),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
 pub struct TaskDef {
     pub command: String,
     pub name: String,
     pub workdir: PathBuf,
     pub color: Option<Color>,
+    pub restart_delay_secs: Option<u32>,
 }
 
 #[derive(Debug)]
 pub struct Task {
+    pub def: TaskDef,
     pub id: usize,
     pub state: TaskState,
-    pub name: String,
     pub logs: Vec<String>,
-    pub color: Option<Color>,
-    pub pid: u32,
     pub collapsed: bool,
-    pub stdin: Option<ChildStdin>,
+    pub message_channel: Sender<TaskMessage>,
 }
 
 impl Task {
-    pub fn run(
-        def: TaskDef,
-        id: usize,
-        message_channel: Sender<TaskMessage>,
-    ) -> Result<Task, Error> {
-        let Ok(workdir) = dunce::canonicalize(def.workdir) else {
-            return Err(Error {
-                title: format!("error running task '{}'", def.name),
-                message: "invalid working directory".into(),
-                ..Error::default()
-            });
-        };
+    pub fn new(def: TaskDef, id: usize, message_channel: Sender<TaskMessage>) -> Task {
+        Task {
+            def,
+            id,
+            logs: Vec::new(),
+            state: TaskState::Stopped,
+            collapsed: false,
+            message_channel,
+        }
+    }
+
+    pub fn run(&mut self) {
+        let id = self.id;
+        let def = self.def.clone();
+
+        if let TaskState::Restarting { .. } | TaskState::ForceRestarting = self.state {
+            self.logs
+                .push("task restarted".dark_grey().italic().to_string());
+        }
 
         let mut process = {
             #[cfg(windows)]
@@ -62,7 +121,7 @@ impl Task {
 
                 Command::new("cmd.exe")
                     .args(["/C", &def.command])
-                    .current_dir(workdir)
+                    .current_dir(def.workdir)
                     .stdin(Stdio::piped())
                     .stdout(Stdio::piped())
                     .stderr(Stdio::piped())
@@ -74,7 +133,7 @@ impl Task {
             #[cfg(not(windows))]
             Command::new("sh")
                 .args(["-c", &def.command])
-                .current_dir(workdir)
+                .current_dir(def.workdir)
                 .stdin(Stdio::null())
                 .stdout(Stdio::piped())
                 .stderr(Stdio::piped())
@@ -82,11 +141,13 @@ impl Task {
                 .spawn()
                 .unwrap()
         };
-        let pid = process.id().unwrap();
-        let stdin = process.stdin.take();
+        self.state = TaskState::Running {
+            pid: process.id().unwrap(),
+            stdin: process.stdin.take(),
+        };
 
         {
-            let message_channel = message_channel.clone();
+            let message_channel = self.message_channel.clone();
             let stdout = process.stdout.take().unwrap();
             tokio::spawn(async move {
                 let mut reader = BufReader::new(stdout);
@@ -94,9 +155,9 @@ impl Task {
 
                 while reader.read_line(&mut line).await.unwrap() != 0 {
                     let _ = message_channel
-                        .send(TaskMessage::Stdout {
+                        .send(TaskMessage {
                             task: id,
-                            line: line.clone(),
+                            kind: TaskMessageKind::Stdout(line.clone()),
                         })
                         .await;
                     line.clear();
@@ -105,7 +166,7 @@ impl Task {
         }
 
         {
-            let message_channel = message_channel.clone();
+            let message_channel = self.message_channel.clone();
             let stderr = process.stderr.take().unwrap();
             tokio::spawn(async move {
                 let mut reader = BufReader::new(stderr);
@@ -113,9 +174,9 @@ impl Task {
 
                 while reader.read_line(&mut line).await.unwrap() != 0 {
                     let _ = message_channel
-                        .send(TaskMessage::Stdout {
+                        .send(TaskMessage {
                             task: id,
-                            line: line.clone(),
+                            kind: TaskMessageKind::Stdout(line.clone()),
                         })
                         .await;
                     line.clear();
@@ -124,93 +185,125 @@ impl Task {
         }
 
         {
-            let message_channel = message_channel.clone();
+            let message_channel = self.message_channel.clone();
             tokio::spawn(async move {
-                #[cfg(windows)]
-                const STATUS_CONTROL_C_EXIT: i32 = 0xC000013Au32 as i32;
-
                 let status = process.wait().await.unwrap();
                 let _ = message_channel
-                    .send(TaskMessage::Exited {
+                    .send(TaskMessage {
                         task: id,
-                        state: match status.code() {
-                            Some(0) => TaskState::Succeeded,
-
-                            #[cfg(unix)]
-                            Some(130) => TaskState::Stopped, // SIGINT exit code
-                            #[cfg(windows)]
-                            Some(STATUS_CONTROL_C_EXIT) => TaskState::Stopped,
-                            #[cfg(windows)]
-                            Some(255) => TaskState::Stopped,
-
-                            Some(code) => TaskState::Failed(code),
+                        kind: TaskMessageKind::Exited(match status.code() {
+                            Some(0) => TaskExitReason::Succeeded,
+                            Some(code) => TaskExitReason::Failed(code),
 
                             #[cfg(unix)]
                             None => {
                                 use nix::sys::signal::Signal;
                                 use std::os::unix::process::ExitStatusExt;
 
-                                let signal = Signal::try_from(status.signal().unwrap()).unwrap();
-
-                                if signal == Signal::SIGINT {
-                                    TaskState::Stopped
-                                } else {
-                                    TaskState::Killed(signal.as_str())
-                                }
+                                TaskExitReason::Killed(
+                                    Signal::try_from(status.signal().unwrap()).unwrap().as_str(),
+                                )
                             }
 
                             #[cfg(not(unix))]
                             None => unreachable!(),
-                        },
+                        }),
                     })
                     .await;
             });
         }
-
-        Ok(Task {
-            name: def.name,
-            color: def.color,
-            id,
-            logs: Vec::new(),
-            state: TaskState::Running,
-            pid,
-            collapsed: false,
-            stdin,
-        })
-    }
-
-    pub fn is_running(&self) -> bool {
-        self.state == TaskState::Running
     }
 
     pub fn end_gracefully(&mut self) {
-        if !self.is_running() {
-            return;
+        let state = std::mem::replace(&mut self.state, TaskState::Stopped);
+        match state {
+            TaskState::Running { pid, stdin } => send_stop_signal(pid, stdin),
+            TaskState::Restarting { cancel_tx, .. } => {
+                cancel_tx.send(()).unwrap();
+                let _ = self.message_channel.try_send(TaskMessage {
+                    task: self.id,
+                    // the receiver will correctly mark this task as completed,
+                    // because the state is set to Stopped. this is kind of ugly,
+                    // but it works for now and avoids the issue of completed_task_count
+                    // not incrementing when a restarting task is stopped.
+                    kind: TaskMessageKind::Exited(TaskExitReason::Succeeded),
+                });
+            }
+            TaskState::Exited(reason) => self.state = TaskState::Exited(reason),
+            _ => {}
+        };
+    }
+
+    pub fn force_restart(&mut self) {
+        let state = std::mem::replace(&mut self.state, TaskState::ForceRestarting);
+        match state {
+            TaskState::Running { pid, stdin } => send_stop_signal(pid, stdin),
+            TaskState::Restarting { cancel_tx, .. } => {
+                cancel_tx.send(()).unwrap();
+                self.run();
+            }
+            TaskState::ForceRestarting => {}
+            _ => self.run(),
         }
+    }
 
-        #[cfg(windows)]
-        {
-            use windows_sys::Win32::System::Console::{GenerateConsoleCtrlEvent, CTRL_BREAK_EVENT};
+    pub fn start_restart_countdown(&mut self, exit_reason: TaskExitReason, delay: u32) {
+        let id = self.id;
+        let message_channel = self.message_channel.clone();
 
-            unsafe {
-                GenerateConsoleCtrlEvent(CTRL_BREAK_EVENT, self.pid);
-                if let Some(mut stdin) = self.stdin.take() {
-                    use tokio::io::AsyncWriteExt;
-                    tokio::spawn(async move {
-                        stdin.write_all(b"Y\n").await.unwrap();
-                    });
-                }
+        let (cancel_tx, cancel_rx) = tokio::sync::oneshot::channel();
+        self.state = TaskState::Restarting {
+            exit_reason,
+            remaining_secs: delay,
+            cancel_tx,
+        };
+
+        tokio::spawn(async move {
+            tokio::select! {
+                _ = cancel_rx => {},
+                _ = async {
+                    for remaining_secs in (1..=delay).rev() {
+                        let _ = message_channel
+                            .send(TaskMessage {
+                                task: id,
+                                kind: TaskMessageKind::Restarting(remaining_secs),
+                            })
+                            .await;
+                        tokio::time::sleep(Duration::from_secs(1)).await;
+                    }
+
+                    let _ = message_channel
+                        .send(TaskMessage { task: id, kind: TaskMessageKind::Restart })
+                        .await;
+                } => {}
+            }
+        });
+    }
+}
+
+fn send_stop_signal(pid: u32, #[allow(unused_variables)] stdin: Option<ChildStdin>) {
+    #[cfg(windows)]
+    {
+        use windows_sys::Win32::System::Console::{GenerateConsoleCtrlEvent, CTRL_BREAK_EVENT};
+
+        unsafe {
+            GenerateConsoleCtrlEvent(CTRL_BREAK_EVENT, pid);
+            if let Some(mut stdin) = stdin {
+                use tokio::io::AsyncWriteExt;
+                tokio::spawn(async move {
+                    stdin.write_all(b"Y\n").await.unwrap();
+                });
             }
         }
+    }
 
-        #[cfg(unix)]
-        {
-            use nix::{
-                sys::signal::{self, Signal},
-                unistd::Pid,
-            };
+    #[cfg(unix)]
+    {
+        use nix::{
+            sys::signal::{self, Signal},
+            unistd::Pid,
+        };
 
-            signal::kill(Pid::from_raw(-(self.pid as i32)), Signal::SIGINT).unwrap();
-        }
+        signal::kill(Pid::from_raw(-(pid as i32)), Signal::SIGINT).unwrap();
     }
 }

@@ -20,6 +20,7 @@ pub fn parse_task(args: &mut Peekable<Args>, task_count: i32) -> Result<TaskDef,
     let mut name = None;
     let mut workdir = None;
     let mut color = None;
+    let mut restart_delay_secs = None;
 
     let mut parse_flag = |args: &mut Peekable<Args>, flag: &str| {
         match flag {
@@ -83,6 +84,16 @@ pub fn parse_task(args: &mut Peekable<Args>, task_count: i32) -> Result<TaskDef,
 
                 color = Some(Color::Rgb { r, g, b });
             }
+            "-r" => {
+                restart_delay_secs = Some(3);
+
+                if let Some(arg) = args.peek() {
+                    if let Ok(secs) = arg.parse::<u32>() {
+                        restart_delay_secs = Some(secs);
+                        args.next();
+                    }
+                }
+            }
             _ => {
                 return Err(Error {
                     title: error_title(),
@@ -121,17 +132,26 @@ pub fn parse_task(args: &mut Peekable<Args>, task_count: i32) -> Result<TaskDef,
         }
     }
 
+    let name =
+        name.or_else(|| workdir.clone())
+            .unwrap_or(format!("#{}: {}", task_count + 1, &command,));
+
+    let workdir = workdir
+        .map(PathBuf::from)
+        .unwrap_or(env::current_dir().unwrap());
+
+    let workdir = dunce::canonicalize(workdir).map_err(|err| Error {
+        title: format!("error in task '{name}'"),
+        message: format!("failed to resolve working directory: {err}"),
+        ..Error::default()
+    })?;
+
     Ok(TaskDef {
-        name: name.or_else(|| workdir.clone()).unwrap_or(format!(
-            "#{}: {}",
-            task_count + 1,
-            &command,
-        )),
+        name,
         command,
-        workdir: workdir
-            .map(|path| PathBuf::from(path))
-            .unwrap_or(env::current_dir().unwrap()),
+        workdir,
         color,
+        restart_delay_secs,
     })
 }
 

@@ -1,6 +1,6 @@
-use crate::task::{Task, TaskState};
+use crate::task::Task;
 use crossterm::event::{Event, KeyCode, KeyEventKind, KeyModifiers};
-use crossterm::style::{Color, Stylize};
+use crossterm::style::{Color, StyledContent, Stylize};
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode, ClearType};
 use crossterm::{cursor, execute, queue, style, terminal, QueueableCommand};
 use std::io::{Stdout, Write};
@@ -38,7 +38,7 @@ enum Line<'a> {
         color: Option<Color>,
         collapsed: bool,
     },
-    TaskStatus(usize, TaskState),
+    TaskStatus(usize, StyledContent<String>),
     Log(usize, &'a str),
     Empty,
 }
@@ -192,6 +192,11 @@ impl Renderer {
                         task.end_gracefully();
                     }
                 }
+                KeyCode::Char('r') => {
+                    if let Some(task) = tasks.get_mut(self.selected_task_id) {
+                        task.force_restart();
+                    }
+                }
                 KeyCode::Esc => {
                     self.overlays.pop();
                 }
@@ -220,8 +225,8 @@ impl Renderer {
         tasks.iter().flat_map(move |task| {
             std::iter::once(Line::TaskName {
                 id: task.id,
-                name: &task.name,
-                color: task.color,
+                name: &task.def.name,
+                color: task.def.color,
                 collapsed: task.collapsed,
             })
             .chain(
@@ -230,7 +235,10 @@ impl Renderer {
                     .into_iter()
                     .flatten(),
             )
-            .chain(std::iter::once(Line::TaskStatus(task.id, task.state)))
+            .chain(std::iter::once(Line::TaskStatus(
+                task.id,
+                task.state.render(),
+            )))
         })
     }
 
@@ -264,14 +272,7 @@ impl Renderer {
                 self.stdout.queue(style::Print(name))?;
                 len
             }
-            Line::TaskStatus(id, state) => {
-                let status_text = match state {
-                    TaskState::Running => "running...".to_owned().green(),
-                    TaskState::Succeeded => "completed".to_owned().green(),
-                    TaskState::Stopped => "stopped".to_owned().green(),
-                    TaskState::Killed(signal) => format!("killed ({signal})").red(),
-                    TaskState::Failed(code) => format!("failed (code {code})").red(),
-                };
+            Line::TaskStatus(id, status_text) => {
                 let len = STATUS_PREFIX.chars().count() + status_text.content().chars().count();
                 queue!(
                     self.stdout,

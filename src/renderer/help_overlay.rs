@@ -38,6 +38,7 @@ pub fn render_help_overlay(stdout: &mut Stdout) -> std::io::Result<()> {
         HelpLine::Text("MANAGING TASKS"),
         HelpLine::Key(("space/enter", "collapse/expand task")),
         HelpLine::Key(("x", "end task")),
+        HelpLine::Key(("r", "restart task")),
         HelpLine::Text(""),
     ];
     let help_height = (lines.len() + 2) as i32;

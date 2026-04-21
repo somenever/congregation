@@ -8,6 +8,7 @@ Inspired by [bun filter](https://bun.sh/docs/cli/filter) and [concurrently](http
 - Beautiful grouped layout with collapsible tasks
 - Interactive TUI with vim-like keybindings
 - Kill individual tasks or all at once
+- Automatic task restart with configurable delay (`-r`)
 - Customizable task colors and headers
 - Cross-platform (Windows, Linux, macOS)
 
@@ -31,9 +32,10 @@ congregation run 'echo task 1' run 'echo task 2'
 You may also add flags such as `-d`, `-n`, `-c` to customize the working directory, task name, and name color respectively:
 ```shell
 congregation \
-    run 'bun dev' -d frontend \
-    run 'go run .' -n server -c ff0000
+    run 'bun dev' -d frontend -r \
+    run 'go run .' -n server -c ff0000 -r 5
 ```
+The `-r` flag makes the task restart automatically on exit after an optional delay defaulting to 3 seconds. `-r 0` makes the task restart without a delay.
 
 For more information, run `congregation help`.
 

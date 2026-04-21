@@ -67,5 +67,6 @@ pub fn print_help(name: &str) {
         -d <dir>      Working directory for the task (defaults to the current working directory)
         -n <name>     Name of the task (used in task header, defaults to working directory or command)
         -c <rrggbb>   Hex RGB color for task name (e.g., ff8800, defaults to white)
+        -r [<secs>]   Restart the task on exit (defaults to 3s if no delay specified)
     ");
 }

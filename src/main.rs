@@ -3,8 +3,8 @@ mod diagnostics;
 mod renderer;
 mod task;
 
-use crate::renderer::Renderer;
-use crate::task::TaskMessage;
+use crate::task::{TaskMessage, TaskMessageKind};
+use crate::{renderer::Renderer, task::TaskState};
 use arg_parser::parse_args;
 use crossterm::event::EventStream;
 use diagnostics::Error;
@@ -21,11 +21,15 @@ async fn run() -> Result<(), Error> {
 
     let (tx, mut rx) = mpsc::channel::<TaskMessage>(32);
 
-    let mut tasks = tasks
+    let mut tasks: Vec<Task> = tasks
         .into_iter()
         .enumerate()
-        .map(|(id, task)| Task::run(task, id, tx.clone()))
-        .collect::<Result<Vec<_>, Error>>()?;
+        .map(|(id, task)| {
+            let mut task = Task::new(task, id, tx.clone());
+            task.run();
+            task
+        })
+        .collect();
 
     let (interrupt_tx, mut interrupt_rx) = broadcast::channel(1);
 
@@ -43,25 +47,56 @@ async fn run() -> Result<(), Error> {
 
     loop {
         tokio::select! {
-            Some(msg) = rx.recv() => match msg {
-                TaskMessage::Stdout { task: id, line } => {
+            Some(TaskMessage { task: id, kind }) = rx.recv() => match kind {
+                TaskMessageKind::Stdout(line) => {
                     let task = tasks.get_mut(id).unwrap();
                     task.logs.push(strip_ansi_escapes::strip_str(line.trim()));
 
                     renderer.draw_tasks(&tasks)?;
                 }
-                TaskMessage::Exited { task: id, state } => {
+                TaskMessageKind::Exited(reason) => {
                     let task = tasks.get_mut(id).unwrap();
 
-                    if task.is_running() {
-                        task.state = state;
+                    match &task.state {
+                        TaskState::ForceRestarting => {
+                            task.run();
+                            renderer.draw_tasks(&tasks)?;
+                            continue;
+                        }
+
+                        TaskState::Running { .. } => {
+                            if let Some(delay) = task.def.restart_delay_secs {
+                                task.start_restart_countdown(reason, delay);
+                                continue;
+                            }
+
+                            task.state = TaskState::Exited(reason);
+                        }
+
+                        TaskState::Stopped => {},
+
+                        _ => unreachable!()
                     }
+
                     renderer.draw_tasks(&tasks)?;
 
                     completed_task_count += 1;
                     if completed_task_count == tasks.len() {
                         break;
                     }
+                }
+                TaskMessageKind::Restarting(secs) => {
+                    let task = tasks.get_mut(id).unwrap();
+
+                    if let TaskState::Restarting { remaining_secs, .. } = &mut task.state {
+                        *remaining_secs = secs;
+                        renderer.draw_tasks(&tasks)?;
+                    }
+                },
+                TaskMessageKind::Restart => {
+                    let task = tasks.get_mut(id).unwrap();
+                    task.run();
+                    renderer.draw_tasks(&tasks)?;
                 }
             },
             Some(Ok(event)) = events.next() => {
