@@ -35,7 +35,7 @@ congregation \
     run 'bun dev' -d frontend -r \
     run 'go run .' -n server -c ff0000 -r 5
 ```
-The `-r` flag makes the task restart automatically on exit after an optional delay defaulting to 3 seconds. `-r 0` makes the task restart without a delay.
+By default a task runs once and stops. Adding -r keeps the task restarting whenever it exits with a 3 second delay between attempts. You can change that delay by providing a number, so -r 0 restarts it immediately.
 
 For more information, run `congregation help`.
 
